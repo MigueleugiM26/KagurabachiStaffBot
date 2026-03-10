@@ -49,7 +49,7 @@ const pendingData = new Map();
 
 // ─── READY ────────────────────────────────────────────────────────────────────
 
-client.once("ready", () => {
+client.once("clientReady", () => {
   console.log(`✅  Logged in as ${client.user.tag}`);
   console.log(`🔍  Watching ${client.guilds.cache.size} guild(s)`);
   if (process.env.GUILD_CONFIGS) {
