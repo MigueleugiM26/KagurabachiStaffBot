@@ -215,7 +215,7 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
     });
     await thread.send({ embeds: [embed] });
     console.log(
-      `[${type.toLowerCase()}] Logged for ${user.username} (${user.id}) in guild ${guild.id} | staff: ${staffName}`,
+      `[${type.toLowerCase()}] Logged for ${user.username} (${user.id}) in guild ${guild.id} (${guild.name}) | staff: ${staffName}`,
     );
   } catch (err) {
     console.error(`[${type?.toLowerCase() ?? "audit"}] Error:`, err);
