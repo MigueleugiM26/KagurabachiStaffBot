@@ -1,4 +1,5 @@
 require("dotenv").config();
+const path = require("path");
 const {
   Client,
   GatewayIntentBits,
@@ -15,6 +16,7 @@ const {
 } = require("discord.js");
 const { findOrCreateThread } = require("./utils/threads");
 const { formatDuration } = require("./utils/format");
+const { initMangaSchedulers } = require("./utils/manga-scheduler");
 const express = require("express");
 
 const client = new Client({
@@ -61,6 +63,13 @@ function readGuildEntry(guildId) {
     tier1Roles: splitRoles(`${prefix}TIER1_ROLES`),
     tier2Roles: splitRoles(`${prefix}TIER2_ROLES`),
     tier3Roles: splitRoles(`${prefix}TIER3_ROLES`),
+    errorsChannelId: process.env[`${prefix}ERRORS_CHANNEL_ID`] ?? null,
+    // ── Manga update settings (all optional) ──
+    mangadexId: process.env[`${prefix}MANGADEX_ID`] ?? null,
+    mangaUpdatesChannel: process.env[`${prefix}MANGAUPDATES_CHANNEL`] ?? null,
+    mangaUpdatesRole: process.env[`${prefix}MANGAUPDATES_ROLE`] ?? null,
+    mangaName: process.env[`${prefix}MANGA_NAME`] ?? null,
+    mangaReleaseTime: process.env[`${prefix}MANGA_RELEASE_TIME`] ?? null,
   };
 }
 
@@ -79,6 +88,11 @@ function normalizeLegacyEntry(guildId, entry) {
     tier1Roles: [],
     tier2Roles: [],
     tier3Roles: adminRoles,
+    mangadexId: null,
+    mangaUpdatesChannel: null,
+    mangaUpdatesRole: null,
+    mangaName: null,
+    mangaReleaseTime: null,
   };
 }
 
@@ -110,6 +124,11 @@ function getAllGuildConfigs() {
       tier1Roles: [],
       tier2Roles: [],
       tier3Roles: [],
+      mangadexId: null,
+      mangaUpdatesChannel: null,
+      mangaUpdatesRole: null,
+      mangaName: null,
+      mangaReleaseTime: null,
     },
   ];
 }
@@ -133,6 +152,7 @@ function getReportsChannelId(guildId) {
 const COMMAND_TIERS = {
   crosscheck: 1,
   crosskick: 1,
+  mangacheck: 2,
   crossmute: 2,
   crossunmute: 2,
   crossban: 3,
@@ -250,7 +270,15 @@ const crossCommands = [
     .addStringOption((o) =>
       o.setName("userid").setDescription("User ID to check").setRequired(true),
     ),
+
+  new SlashCommandBuilder()
+    .setName("mangacheck")
+    .setDescription("Manually check for a new chapter and post if found")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
 ].map((c) => c.toJSON());
+
+// ─── MANGA SCHEDULER (initialised after ready) ────────────────────────────────
+let mangaScheduler = null;
 
 // ─── READY ────────────────────────────────────────────────────────────────────
 
@@ -264,6 +292,12 @@ client.once("ready", async () => {
       `📋  Guild ${c.guildId} → reports: ${c.channelId} | appeals: ${c.appealsChannelId ?? "not set"} | prefix: ${c.prefix}`,
     );
   }
+
+  mangaScheduler = initMangaSchedulers(
+    client,
+    configs,
+    path.join(__dirname, "messages"),
+  );
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
   for (const c of configs) {
@@ -496,6 +530,7 @@ client.on("interactionCreate", async (interaction) => {
     "crossunban",
     "crosskick",
     "crosscheck",
+    "mangacheck",
   ];
   if (!validCommands.includes(commandName)) return;
 
@@ -515,7 +550,7 @@ client.on("interactionCreate", async (interaction) => {
 
   await interaction.deferReply();
 
-  const userId = interaction.options.getString("userid");
+  const userId = interaction.options.getString("userid") ?? null;
   const reason =
     interaction.options.getString("reason") || "No reason provided";
   const staffName = member.user.username;
@@ -580,6 +615,26 @@ client.on("interactionCreate", async (interaction) => {
       sourceGuild,
       replyTarget: interaction,
     });
+  } else if (commandName === "mangacheck") {
+    if (!mangaScheduler) {
+      return interaction.editReply(
+        "⏳ Bot is still initializing, try again in a moment.",
+      );
+    }
+    try {
+      const result = await mangaScheduler.manualCheck(guild.id);
+      if (result) {
+        await interaction.editReply(
+          `✅ Posted: **${result.chapterName}**\n${result.chapterLink}`,
+        );
+      } else {
+        await interaction.editReply(
+          "ℹ️ No new chapter found — either it's a break week, it was already posted, or manga updates aren't configured for this server.",
+        );
+      }
+    } catch (err) {
+      await interaction.editReply(`❌ Error: ${err.message}`);
+    }
   }
 });
 
