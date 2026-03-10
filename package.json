@@ -1,7 +1,7 @@
 {
   "name": "mod-logger",
   "version": "1.0.0",
-  "description": "Auto-logs Sapphire moderation actions to threaded #reports channel",
+  "description": "Auto-logs moderation actions to threaded #reports channel",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "discord.js": "^14.15.0",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2"
   },
   "engines": {
     "node": ">=18.0.0"

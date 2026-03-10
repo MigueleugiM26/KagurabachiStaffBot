@@ -9,9 +9,13 @@ const {
   Routes,
   SlashCommandBuilder,
   PermissionFlagsBits,
+  ButtonBuilder,
+  ButtonStyle,
+  ActionRowBuilder,
 } = require("discord.js");
 const { findOrCreateThread } = require("./utils/threads");
 const { formatDuration } = require("./utils/format");
+const express = require("express");
 
 const client = new Client({
   intents: [
@@ -24,6 +28,15 @@ const client = new Client({
 });
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
+// GUILD_CONFIGS format:
+// {
+//   "guildId": {
+//     "channelId": "reportsChannelId",
+//     "appealsChannelId": "appealsChannelId",
+//     "prefix": "!",
+//     "adminRoles": ["roleId1", "roleId2"]
+//   }
+// }
 
 function getGuildConfig(guildId) {
   if (process.env.GUILD_CONFIGS) {
@@ -33,17 +46,20 @@ function getGuildConfig(guildId) {
     if (typeof entry === "string")
       return {
         channelId: entry,
+        appealsChannelId: null,
         prefix: process.env.COMMAND_PREFIX || "!",
         adminRoles: [],
       };
     return {
       channelId: entry.channelId,
+      appealsChannelId: entry.appealsChannelId ?? null,
       prefix: entry.prefix || "!",
       adminRoles: entry.adminRoles || [],
     };
   }
   return {
     channelId: process.env.REPORTS_CHANNEL_ID,
+    appealsChannelId: process.env.APPEALS_CHANNEL_ID ?? null,
     prefix: process.env.COMMAND_PREFIX || "!",
     adminRoles: [],
   };
@@ -55,9 +71,15 @@ function getAllGuildConfigs() {
     return Object.entries(configs).map(([guildId, entry]) => ({
       guildId,
       ...(typeof entry === "string"
-        ? { channelId: entry, prefix: "!", adminRoles: [] }
+        ? {
+            channelId: entry,
+            appealsChannelId: null,
+            prefix: "!",
+            adminRoles: [],
+          }
         : {
             channelId: entry.channelId,
+            appealsChannelId: entry.appealsChannelId ?? null,
             prefix: entry.prefix || "!",
             adminRoles: entry.adminRoles || [],
           }),
@@ -67,6 +89,7 @@ function getAllGuildConfigs() {
     {
       guildId: null,
       channelId: process.env.REPORTS_CHANNEL_ID,
+      appealsChannelId: process.env.APPEALS_CHANNEL_ID ?? null,
       prefix: process.env.COMMAND_PREFIX || "!",
       adminRoles: [],
     },
@@ -83,6 +106,13 @@ function hasAdminRole(member, adminRoles) {
 }
 
 const CROSS_PREFIX = process.env.CROSS_PREFIX || "&";
+const CROSSMUTE_FORM =
+  process.env.CROSSMUTE_FORM_URL ||
+  "https://docs.google.com/forms/d/e/1FAIpQLSemzPCO26jA4htNouc1Bafi3QULAIHcYYFRL5tEM9_xGW9ZNg/viewform";
+const CROSSBAN_FORM =
+  process.env.CROSSBAN_FORM_URL ||
+  "https://docs.google.com/forms/d/e/1FAIpQLSfmAwCBcT2jBCvDe4pVlUmWbCxfRaJwjTNHZwCwjgrIKyXleQ/viewform";
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "changeme";
 
 const pendingData = new Map();
 const crossActionInProgress = new Set();
@@ -159,6 +189,14 @@ const crossCommands = [
     .addAttachmentOption((o) =>
       o.setName("image").setDescription("Optional image").setRequired(false),
     ),
+
+  new SlashCommandBuilder()
+    .setName("crosscheck")
+    .setDescription("Check a user's presence and info across all servers")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+    .addStringOption((o) =>
+      o.setName("userid").setDescription("User ID to check").setRequired(true),
+    ),
 ].map((c) => c.toJSON());
 
 // ─── READY ────────────────────────────────────────────────────────────────────
@@ -170,7 +208,7 @@ client.once("ready", async () => {
   const configs = getAllGuildConfigs();
   for (const c of configs) {
     console.log(
-      `📋  Guild ${c.guildId} → channel ${c.channelId} | prefix: ${c.prefix} | adminRoles: [${c.adminRoles.join(", ")}]`,
+      `📋  Guild ${c.guildId} → reports: ${c.channelId} | appeals: ${c.appealsChannelId ?? "not set"} | prefix: ${c.prefix}`,
     );
   }
 
@@ -212,6 +250,7 @@ client.on("messageCreate", async (message) => {
       "crossban",
       "crossunban",
       "crosskick",
+      "crosscheck",
     ];
 
     if (validCrossCommands.includes(command)) {
@@ -280,6 +319,8 @@ client.on("messageCreate", async (message) => {
           imageUrl,
           replyTarget: message,
         });
+      } else if (command === "crosscheck") {
+        await executeCrossCheck({ userId, replyTarget: message });
       }
       return;
     }
@@ -367,6 +408,12 @@ client.on("messageCreate", async (message) => {
 // ─── SLASH COMMAND HANDLER ────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
+  // ── Button handler ──
+  if (interaction.isButton()) {
+    await handleAppealButton(interaction);
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName, guild, member } = interaction;
@@ -376,6 +423,7 @@ client.on("interactionCreate", async (interaction) => {
     "crossban",
     "crossunban",
     "crosskick",
+    "crosscheck",
   ];
   if (!validCommands.includes(commandName)) return;
 
@@ -435,8 +483,117 @@ client.on("interactionCreate", async (interaction) => {
       imageUrl,
       replyTarget: interaction,
     });
+  } else if (commandName === "crosscheck") {
+    await executeCrossCheck({ userId, replyTarget: interaction });
   }
 });
+
+// ─── APPEAL BUTTON HANDLER ────────────────────────────────────────────────────
+
+async function handleAppealButton(interaction) {
+  const { customId, guild, member } = interaction;
+
+  // customId format: appeal_accept_mute_{userId} or appeal_reject_mute_{userId}
+  if (!customId.startsWith("appeal_")) return;
+
+  const parts = customId.split("_");
+  // parts: ["appeal", "accept"|"reject", "mute"|"ban", userId]
+  const action = parts[1]; // accept or reject
+  const type = parts[2]; // mute or ban
+  const userId = parts[3];
+
+  const config = getGuildConfig(guild.id);
+
+  // Check if staff member has permission
+  if (!hasAdminRole(member, config?.adminRoles ?? [])) {
+    return interaction.reply({
+      content: "❌ You don't have permission to approve or reject appeals.",
+      ephemeral: true,
+    });
+  }
+
+  await interaction.deferUpdate();
+
+  const originalEmbed = interaction.message.embeds[0];
+  const staffName = member.user.username;
+
+  if (action === "accept") {
+    const user = await client.users.fetch(userId).catch(() => null);
+    const username = user?.username ?? userId;
+
+    // Execute the appropriate cross-action
+    if (type === "mute") {
+      await executeCrossUnmute({
+        userId,
+        reason: "Appeal accepted",
+        staffName,
+        replyTarget: null,
+      });
+    } else if (type === "ban") {
+      await executeCrossUnban({
+        userId,
+        reason: "Appeal accepted",
+        staffName,
+        replyTarget: null,
+      });
+    }
+
+    // Update embed to show accepted
+    const updatedEmbed = EmbedBuilder.from(originalEmbed)
+      .setColor(Colors.Green)
+      .addFields({ name: "✅ Approved by", value: staffName });
+
+    const disabledRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`appeal_accept_${type}_${userId}`)
+        .setLabel("Approve")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(`appeal_reject_${type}_${userId}`)
+        .setLabel("Reject")
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(true),
+    );
+
+    await interaction.editReply({
+      embeds: [updatedEmbed],
+      components: [disabledRow],
+    });
+    console.log(
+      `[appeal] Accepted ${type} appeal for ${username} by ${staffName}`,
+    );
+  } else if (action === "reject") {
+    const user = await client.users.fetch(userId).catch(() => null);
+    const username = user?.username ?? userId;
+
+    // Update embed to show rejected
+    const updatedEmbed = EmbedBuilder.from(originalEmbed)
+      .setColor(Colors.Red)
+      .addFields({ name: "❌ Rejected by", value: staffName });
+
+    const disabledRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`appeal_accept_${type}_${userId}`)
+        .setLabel("Approve")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(`appeal_reject_${type}_${userId}`)
+        .setLabel("Reject")
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(true),
+    );
+
+    await interaction.editReply({
+      embeds: [updatedEmbed],
+      components: [disabledRow],
+    });
+    console.log(
+      `[appeal] Rejected ${type} appeal for ${username} by ${staffName}`,
+    );
+  }
+}
 
 // ─── CROSS-COMMAND EXECUTORS ──────────────────────────────────────────────────
 
@@ -450,23 +607,28 @@ async function executeCrossMute({
 }) {
   const ms = parseDuration(durationStr);
   if (!ms)
-    return sendReply(
-      replyTarget,
-      "❌ Invalid duration. Use formats like `10m`, `1h`, `7d`.",
+    return (
+      replyTarget &&
+      sendReply(
+        replyTarget,
+        "❌ Invalid duration. Use formats like `10m`, `1h`, `7d`.",
+      )
     );
 
   const configs = getAllGuildConfigs().filter((c) => c.guildId);
   const user = await client.users.fetch(userId).catch(() => null);
   if (!user)
-    return sendReply(
-      replyTarget,
-      `❌ Could not find user with ID \`${userId}\`.`,
+    return (
+      replyTarget &&
+      sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
     );
 
-  const progressMsg = await sendReply(
-    replyTarget,
-    `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
-  );
+  const progressMsg = replyTarget
+    ? await sendReply(
+        replyTarget,
+        `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
+      )
+    : null;
 
   crossActionInProgress.add(userId);
   setTimeout(() => crossActionInProgress.delete(userId), 30_000);
@@ -517,27 +679,42 @@ async function executeCrossMute({
     filePrefix: "crossmute",
   });
 
+  // DM the user with appeal form link
+  await user
+    .send(
+      `🔇 You have been **cross-muted** across multiple servers.\n` +
+        `**Reason:** ${reason}\n` +
+        `**Duration:** ${durationStr}\n\n` +
+        `If you believe this was a mistake, you can appeal here:\n${CROSSMUTE_FORM}`,
+    )
+    .catch(() =>
+      console.log(`[dm] Could not DM ${user.username} — DMs likely closed`),
+    );
+
   const successCount = results.filter((r) => r.status === "✅ Muted").length;
-  await editReply(
-    replyTarget,
-    progressMsg,
-    `🔇 Cross-mute complete. Muted **${user.username}** in **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
-  );
+  if (progressMsg)
+    await editReply(
+      replyTarget,
+      progressMsg,
+      `🔇 Cross-mute complete. Muted **${user.username}** in **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
+    );
 }
 
 async function executeCrossUnmute({ userId, reason, staffName, replyTarget }) {
   const configs = getAllGuildConfigs().filter((c) => c.guildId);
   const user = await client.users.fetch(userId).catch(() => null);
   if (!user)
-    return sendReply(
-      replyTarget,
-      `❌ Could not find user with ID \`${userId}\`.`,
+    return (
+      replyTarget &&
+      sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
     );
 
-  const progressMsg = await sendReply(
-    replyTarget,
-    `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
-  );
+  const progressMsg = replyTarget
+    ? await sendReply(
+        replyTarget,
+        `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
+      )
+    : null;
 
   crossActionInProgress.add(userId);
   setTimeout(() => crossActionInProgress.delete(userId), 30_000);
@@ -589,11 +766,12 @@ async function executeCrossUnmute({ userId, reason, staffName, replyTarget }) {
   });
 
   const successCount = results.filter((r) => r.status === "✅ Unmuted").length;
-  await editReply(
-    replyTarget,
-    progressMsg,
-    `🔊 Cross-unmute complete. Unmuted **${user.username}** in **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
-  );
+  if (progressMsg)
+    await editReply(
+      replyTarget,
+      progressMsg,
+      `🔊 Cross-unmute complete. Unmuted **${user.username}** in **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
+    );
 }
 
 async function executeCrossBan({
@@ -606,15 +784,17 @@ async function executeCrossBan({
   const configs = getAllGuildConfigs().filter((c) => c.guildId);
   const user = await client.users.fetch(userId).catch(() => null);
   if (!user)
-    return sendReply(
-      replyTarget,
-      `❌ Could not find user with ID \`${userId}\`.`,
+    return (
+      replyTarget &&
+      sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
     );
 
-  const progressMsg = await sendReply(
-    replyTarget,
-    `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
-  );
+  const progressMsg = replyTarget
+    ? await sendReply(
+        replyTarget,
+        `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
+      )
+    : null;
 
   crossActionInProgress.add(userId);
   setTimeout(() => crossActionInProgress.delete(userId), 30_000);
@@ -656,27 +836,41 @@ async function executeCrossBan({
     filePrefix: "crossban",
   });
 
+  // DM the user with appeal form link
+  await user
+    .send(
+      `🔨 You have been **cross-banned** from multiple servers.\n` +
+        `**Reason:** ${reason}\n\n` +
+        `If you believe this was a mistake, you can appeal here:\n${CROSSBAN_FORM}`,
+    )
+    .catch(() =>
+      console.log(`[dm] Could not DM ${user.username} — DMs likely closed`),
+    );
+
   const successCount = results.filter((r) => r.status === "✅ Banned").length;
-  await editReply(
-    replyTarget,
-    progressMsg,
-    `🔨 Cross-ban complete. Banned **${user.username}** in **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
-  );
+  if (progressMsg)
+    await editReply(
+      replyTarget,
+      progressMsg,
+      `🔨 Cross-ban complete. Banned **${user.username}** in **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
+    );
 }
 
 async function executeCrossUnban({ userId, reason, staffName, replyTarget }) {
   const configs = getAllGuildConfigs().filter((c) => c.guildId);
   const user = await client.users.fetch(userId).catch(() => null);
   if (!user)
-    return sendReply(
-      replyTarget,
-      `❌ Could not find user with ID \`${userId}\`.`,
+    return (
+      replyTarget &&
+      sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
     );
 
-  const progressMsg = await sendReply(
-    replyTarget,
-    `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
-  );
+  const progressMsg = replyTarget
+    ? await sendReply(
+        replyTarget,
+        `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
+      )
+    : null;
 
   crossActionInProgress.add(userId);
   setTimeout(() => crossActionInProgress.delete(userId), 30_000);
@@ -719,11 +913,12 @@ async function executeCrossUnban({ userId, reason, staffName, replyTarget }) {
   });
 
   const successCount = results.filter((r) => r.status === "✅ Unbanned").length;
-  await editReply(
-    replyTarget,
-    progressMsg,
-    `✅ Cross-unban complete. Unbanned **${user.username}** in **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
-  );
+  if (progressMsg)
+    await editReply(
+      replyTarget,
+      progressMsg,
+      `✅ Cross-unban complete. Unbanned **${user.username}** in **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
+    );
 }
 
 async function executeCrossKick({
@@ -736,15 +931,17 @@ async function executeCrossKick({
   const configs = getAllGuildConfigs().filter((c) => c.guildId);
   const user = await client.users.fetch(userId).catch(() => null);
   if (!user)
-    return sendReply(
-      replyTarget,
-      `❌ Could not find user with ID \`${userId}\`.`,
+    return (
+      replyTarget &&
+      sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
     );
 
-  const progressMsg = await sendReply(
-    replyTarget,
-    `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
-  );
+  const progressMsg = replyTarget
+    ? await sendReply(
+        replyTarget,
+        `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
+      )
+    : null;
 
   crossActionInProgress.add(userId);
   setTimeout(() => crossActionInProgress.delete(userId), 30_000);
@@ -796,73 +993,204 @@ async function executeCrossKick({
   });
 
   const successCount = results.filter((r) => r.status === "✅ Kicked").length;
-  await editReply(
-    replyTarget,
-    progressMsg,
-    `👢 Cross-kick complete. Kicked **${user.username}** from **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
-  );
+  if (progressMsg)
+    await editReply(
+      replyTarget,
+      progressMsg,
+      `👢 Cross-kick complete. Kicked **${user.username}** from **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
+    );
 }
 
-// Shared logging logic for all cross-commands
-async function logCrossAction({
-  configs,
-  user,
-  results,
+async function executeCrossCheck({ userId, replyTarget }) {
+  const user = await client.users.fetch(userId).catch(() => null);
+  if (!user)
+    return sendReply(
+      replyTarget,
+      `❌ Could not find user with ID \`${userId}\`.`,
+    );
+
+  const configs = getAllGuildConfigs().filter((c) => c.guildId);
+  const progressMsg = await sendReply(
+    replyTarget,
+    `🔍 Checking **${user.username}** across ${configs.length} server(s)...`,
+  );
+
+  const accountAge = Math.floor(
+    (Date.now() - user.createdTimestamp) / 86400000,
+  );
+
+  const lines = [];
+  for (const c of configs) {
+    const guild = client.guilds.cache.get(c.guildId);
+    if (!guild) {
+      lines.push(`⚠️ **${c.guildId}** — bot not in guild`);
+      continue;
+    }
+
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) {
+      // Check if they're banned
+      const ban = await guild.bans.fetch(userId).catch(() => null);
+      if (ban) {
+        lines.push(
+          `🔨 **${guild.name}** — Banned (reason: ${ban.reason ?? "none"})`,
+        );
+      } else {
+        lines.push(`➖ **${guild.name}** — Not a member`);
+      }
+      continue;
+    }
+
+    const joinedAgo = Math.floor(
+      (Date.now() - member.joinedTimestamp) / 86400000,
+    );
+    const topRole = member.roles.highest?.name ?? "none";
+    const isMuted =
+      member.communicationDisabledUntilTimestamp &&
+      member.communicationDisabledUntilTimestamp > Date.now();
+    const muteStr = isMuted
+      ? ` | 🔇 Muted until <t:${Math.floor(member.communicationDisabledUntilTimestamp / 1000)}:R>`
+      : "";
+    lines.push(
+      `✅ **${guild.name}** — Joined ${joinedAgo}d ago | Top role: ${topRole}${muteStr}`,
+    );
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🔍 Cross-Check: ${user.username}`)
+    .setThumbnail(user.displayAvatarURL())
+    .setColor(Colors.Blurple)
+    .setDescription(lines.join("\n"))
+    .addFields(
+      { name: "User ID", value: user.id, inline: true },
+      { name: "Account Age", value: `${accountAge} days`, inline: true },
+      {
+        name: "Account Created",
+        value: `<t:${Math.floor(user.createdTimestamp / 1000)}:D>`,
+        inline: true,
+      },
+    )
+    .setTimestamp();
+
+  await editReply(replyTarget, progressMsg, { content: "", embeds: [embed] });
+}
+
+// ─── APPEAL WEBHOOK HANDLER ───────────────────────────────────────────────────
+
+async function handleAppealSubmission({
   type,
-  emoji,
-  color,
-  reason,
-  duration,
-  staffName,
-  imageUrl,
-  filePrefix,
+  userId,
+  username,
+  whyMutedBanned,
+  whyAccept,
+  additional,
 }) {
-  const date = new Date().toISOString().slice(0, 10);
-  const fileName = `${filePrefix}_servers_${user.username}_${date}.txt`;
-  const successCount = results.filter((r) => r.status.startsWith("✅")).length;
+  const configs = getAllGuildConfigs().filter(
+    (c) => c.guildId && c.appealsChannelId,
+  );
+
+  if (configs.length === 0) {
+    console.warn("[appeal] No guilds have appealsChannelId configured.");
+    return;
+  }
+
+  const user = await client.users.fetch(userId).catch(() => null);
+  const displayName = user?.username ?? username ?? userId;
+  const avatarUrl = user?.displayAvatarURL() ?? null;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📋 ${type === "mute" ? "Cross-Mute" : "Cross-Ban"} Appeal`)
+    .setColor(Colors.Yellow)
+    .setThumbnail(avatarUrl)
+    .addFields(
+      { name: "User", value: `${displayName} (\`${userId}\`)` },
+      {
+        name:
+          "1. Why did you get " + (type === "mute" ? "muted" : "banned") + "?",
+        value: whyMutedBanned || "No answer",
+      },
+      {
+        name: "2. Why do you believe your appeal should be accepted?",
+        value: whyAccept || "No answer",
+      },
+      {
+        name: "3. Is there anything else you would like us to know?",
+        value: additional || "N/A",
+      },
+    )
+    .setTimestamp();
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`appeal_accept_${type}_${userId}`)
+      .setLabel("Approve")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`appeal_reject_${type}_${userId}`)
+      .setLabel("Reject")
+      .setStyle(ButtonStyle.Danger),
+  );
 
   for (const c of configs) {
-    if (!c.channelId) continue;
     const guild = client.guilds.cache.get(c.guildId);
     if (!guild) continue;
 
-    const reportsChannel = await guild.channels
-      .fetch(c.channelId)
+    const appealsChannel = await guild.channels
+      .fetch(c.appealsChannelId)
       .catch(() => null);
-    if (!reportsChannel) continue;
+    if (!appealsChannel) {
+      console.warn(`[appeal] Appeals channel not found in guild ${guild.name}`);
+      continue;
+    }
 
-    const thread = await findOrCreateThread(reportsChannel, user).catch(
-      () => null,
+    await appealsChannel.send({ embeds: [embed], components: [row] });
+    console.log(
+      `[appeal] Posted ${type} appeal for ${displayName} in guild ${guild.name}`,
     );
-    if (!thread) continue;
-
-    const embed = buildEmbed({
-      type,
-      emoji,
-      color,
-      reason,
-      duration,
-      staffName,
-      imageUrl,
-      extraField: {
-        name: "Servers Affected",
-        value: `${successCount}/${configs.length}`,
-      },
-    });
-
-    await thread
-      .send({
-        embeds: [embed],
-        files: [
-          {
-            name: fileName,
-            attachment: Buffer.from(buildServerList(results, type)),
-          },
-        ],
-      })
-      .catch(console.error);
   }
 }
+
+// ─── EXPRESS WEBHOOK SERVER ───────────────────────────────────────────────────
+
+const app = express();
+app.use(express.json());
+
+app.post("/appeal", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (secret !== WEBHOOK_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const { type, userId, username, whyMutedBanned, whyAccept, additional } =
+    req.body;
+
+  if (!type || !userId) {
+    return res
+      .status(400)
+      .json({ error: "Missing required fields: type, userId" });
+  }
+
+  res.status(200).json({ ok: true });
+
+  // Handle async without blocking the response
+  handleAppealSubmission({
+    type,
+    userId,
+    username,
+    whyMutedBanned,
+    whyAccept,
+    additional,
+  }).catch((err) => console.error("[appeal] Error handling submission:", err));
+});
+
+app.get("/health", (req, res) =>
+  res.json({ ok: true, bot: client.user?.tag ?? "not ready" }),
+);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () =>
+  console.log(`🌐  Webhook server listening on port ${PORT}`),
+);
 
 // ─── AUDIT LOG LISTENER ───────────────────────────────────────────────────────
 
@@ -961,6 +1289,68 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
   }
 });
 
+// ─── SHARED LOGGING ───────────────────────────────────────────────────────────
+
+async function logCrossAction({
+  configs,
+  user,
+  results,
+  type,
+  emoji,
+  color,
+  reason,
+  duration,
+  staffName,
+  imageUrl,
+  filePrefix,
+}) {
+  const date = new Date().toISOString().slice(0, 10);
+  const fileName = `${filePrefix}_servers_${user.username}_${date}.txt`;
+  const successCount = results.filter((r) => r.status.startsWith("✅")).length;
+
+  for (const c of configs) {
+    if (!c.channelId) continue;
+    const guild = client.guilds.cache.get(c.guildId);
+    if (!guild) continue;
+
+    const reportsChannel = await guild.channels
+      .fetch(c.channelId)
+      .catch(() => null);
+    if (!reportsChannel) continue;
+
+    const thread = await findOrCreateThread(reportsChannel, user).catch(
+      () => null,
+    );
+    if (!thread) continue;
+
+    const embed = buildEmbed({
+      type,
+      emoji,
+      color,
+      reason,
+      duration,
+      staffName,
+      imageUrl,
+      extraField: {
+        name: "Servers Affected",
+        value: `${successCount}/${configs.length}`,
+      },
+    });
+
+    await thread
+      .send({
+        embeds: [embed],
+        files: [
+          {
+            name: fileName,
+            attachment: Buffer.from(buildServerList(results, type)),
+          },
+        ],
+      })
+      .catch(console.error);
+  }
+}
+
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 function buildEmbed({
@@ -1009,11 +1399,13 @@ function parseDuration(str) {
 }
 
 async function sendReply(target, content) {
+  if (!target) return null;
   if (target.deferred || target.replied) return target.editReply(content);
   return target.reply(content);
 }
 
 async function editReply(target, progressMsg, content) {
+  if (!target) return;
   try {
     if (target.deferred || target.replied) {
       await target.editReply(content);
