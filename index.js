@@ -19,28 +19,40 @@ const client = new Client({
   ],
 });
 
-// Stores { url, staffName, timestamp } keyed by target userId
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+// Supports multiple servers. GUILD_CONFIGS is a JSON map of guildId → reportsChannelId.
+// Example: {"123456789": "987654321", "111222333": "444555666"}
+// Falls back to legacy single-server REPORTS_CHANNEL_ID if GUILD_CONFIGS is not set.
+
+function getReportsChannelId(guildId) {
+  if (process.env.GUILD_CONFIGS) {
+    const configs = JSON.parse(process.env.GUILD_CONFIGS);
+    return configs[guildId] ?? null;
+  }
+  return process.env.REPORTS_CHANNEL_ID ?? null;
+}
+
+// Stores { url, staffName, timestamp } keyed by "guildId:userId"
 const pendingData = new Map();
 
 // ─── READY ────────────────────────────────────────────────────────────────────
 
 client.once("ready", () => {
   console.log(`✅  Logged in as ${client.user.tag}`);
-  console.log(`📋  Reports channel: ${process.env.REPORTS_CHANNEL_ID}`);
-  console.log(`🔤  Prefix: ${process.env.COMMAND_PREFIX || "!"}`);
   console.log(`🔍  Watching ${client.guilds.cache.size} guild(s)`);
+  if (process.env.GUILD_CONFIGS) {
+    const configs = JSON.parse(process.env.GUILD_CONFIGS);
+    for (const [guildId, channelId] of Object.entries(configs)) {
+      console.log(`📋  Guild ${guildId} → reports channel ${channelId}`);
+    }
+  } else {
+    console.log(`📋  Reports channel: ${process.env.REPORTS_CHANNEL_ID}`);
+  }
 });
 
 // ─── MESSAGE LISTENER ─────────────────────────────────────────────────────────
 
 client.on("messageCreate", async (message) => {
-  // Log EVERY message so we can confirm the bot is reading them
-  if (message.guild) {
-    console.log(
-      `[msg-debug] channel=${message.channel.name} author=${message.author.username} bot=${message.author.bot} content=${message.content.slice(0, 80)}`,
-    );
-  }
-
   if (!message.guild || message.author.bot) return;
 
   const prefix = process.env.COMMAND_PREFIX || "!";
@@ -67,27 +79,33 @@ client.on("messageCreate", async (message) => {
   if (!/^\d+$/.test(userId)) return;
 
   const attachment = message.attachments.first();
+  const key = `${message.guild.id}:${userId}`;
 
   console.log(
-    `[msg] ✅ Caught command="${command}" target=${userId} staff=${message.author.username}`,
+    `[msg] ✅ command="${command}" target=${userId} staff=${message.author.username} guild=${message.guild.id}`,
   );
-  pendingData.set(userId, {
+  pendingData.set(key, {
     staffName: message.author.username,
     url: attachment?.url ?? null,
     timestamp: Date.now(),
   });
-  setTimeout(() => pendingData.delete(userId), 15_000);
+  setTimeout(() => pendingData.delete(key), 15_000);
 
   // ── Handle !warn manually ──
   if (command === "warn") {
     const reason = args.slice(2).join(" ") || "No reason provided";
     try {
+      const reportsChannelId = getReportsChannelId(message.guild.id);
+      if (!reportsChannelId)
+        return console.warn(
+          `[warn] No reports channel configured for guild ${message.guild.id}`,
+        );
+
       const user = await client.users.fetch(userId).catch(() => null);
       if (!user) return console.warn(`[warn] Could not fetch user ${userId}`);
 
-      const reportsChannel = await message.guild.channels.fetch(
-        process.env.REPORTS_CHANNEL_ID,
-      );
+      const reportsChannel =
+        await message.guild.channels.fetch(reportsChannelId);
       if (!reportsChannel)
         return console.error("[warn] Reports channel not found!");
 
@@ -102,7 +120,9 @@ client.on("messageCreate", async (message) => {
         imageUrl: attachment?.url ?? null,
       });
       await thread.send({ embeds: [embed] });
-      console.log(`[warn] Logged for ${user.username} (${userId})`);
+      console.log(
+        `[warn] Logged for ${user.username} (${userId}) in guild ${message.guild.id}`,
+      );
     } catch (err) {
       console.error("[warn] Error:", err);
     }
@@ -113,6 +133,10 @@ client.on("messageCreate", async (message) => {
 
 client.on("guildAuditLogEntryCreate", async (entry, guild) => {
   const { action, target, reason, changes } = entry;
+
+  // Skip guilds that have no reports channel configured
+  const reportsChannelId = getReportsChannelId(guild.id);
+  if (!reportsChannelId) return;
 
   let type, emoji, color, duration;
 
@@ -152,32 +176,28 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
   }
 
   try {
-    const reportsChannel = await guild.channels.fetch(
-      process.env.REPORTS_CHANNEL_ID,
-    );
+    const reportsChannel = await guild.channels.fetch(reportsChannelId);
     if (!reportsChannel)
-      return console.error("[audit] Reports channel not found!");
+      return console.error(
+        `[audit] Reports channel not found for guild ${guild.id}`,
+      );
 
     const user = target;
     if (!user) return;
 
-    const pending = pendingData.get(user.id);
-    console.log(
-      `[audit] type=${type} user=${user.id} pendingFound=${!!pending}`,
-    );
+    const key = `${guild.id}:${user.id}`;
+    const pending = pendingData.get(key);
+    if (pending) pendingData.delete(key);
 
     const imageUrl = pending?.url ?? null;
     let staffName = pending?.staffName ?? null;
-    if (pending) pendingData.delete(user.id);
 
-    // Last resort: fetch audit log manually (will still show Dyno if message wasn't caught)
     if (!staffName) {
       try {
         await new Promise((r) => setTimeout(r, 1500));
         const logs = await guild.fetchAuditLogs({ limit: 5, type: action });
         const match = logs.entries.find((e) => e.target?.id === user.id);
         staffName = match?.executor?.username ?? "Unknown";
-        console.log(`[audit] fallback executor fetched: ${staffName}`);
       } catch {
         staffName = "Unknown";
       }
@@ -195,7 +215,7 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
     });
     await thread.send({ embeds: [embed] });
     console.log(
-      `[${type.toLowerCase()}] Logged for ${user.username} (${user.id}) | staff: ${staffName}`,
+      `[${type.toLowerCase()}] Logged for ${user.username} (${user.id}) in guild ${guild.id} | staff: ${staffName}`,
     );
   } catch (err) {
     console.error(`[${type?.toLowerCase() ?? "audit"}] Error:`, err);
@@ -221,7 +241,6 @@ function buildEmbed({
       { name: "Staff", value: staffName },
     )
     .setTimestamp();
-
   if (imageUrl) embed.setImage(imageUrl);
   return embed;
 }
