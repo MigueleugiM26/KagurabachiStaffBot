@@ -145,6 +145,20 @@ const crossCommands = [
     .addStringOption((o) =>
       o.setName("reason").setDescription("Reason").setRequired(false),
     ),
+
+  new SlashCommandBuilder()
+    .setName("crosskick")
+    .setDescription("Kick a user from ALL servers the bot is in")
+    .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers)
+    .addStringOption((o) =>
+      o.setName("userid").setDescription("User ID to kick").setRequired(true),
+    )
+    .addStringOption((o) =>
+      o.setName("reason").setDescription("Reason").setRequired(false),
+    )
+    .addAttachmentOption((o) =>
+      o.setName("image").setDescription("Optional image").setRequired(false),
+    ),
 ].map((c) => c.toJSON());
 
 // ─── READY ────────────────────────────────────────────────────────────────────
@@ -192,14 +206,15 @@ client.on("messageCreate", async (message) => {
   if (content.startsWith(CROSS_PREFIX)) {
     const args = content.slice(CROSS_PREFIX.length).trim().split(/\s+/);
     const command = args[0]?.toLowerCase();
-    const crossCommands = [
+    const validCrossCommands = [
       "crossmute",
       "crossunmute",
       "crossban",
       "crossunban",
+      "crosskick",
     ];
 
-    if (crossCommands.includes(command)) {
+    if (validCrossCommands.includes(command)) {
       if (!hasAdminRole(message.member, config.adminRoles)) {
         return message.reply(
           "❌ You don't have permission to use cross-commands.",
@@ -254,6 +269,15 @@ client.on("messageCreate", async (message) => {
           userId,
           reason,
           staffName: message.author.username,
+          replyTarget: message,
+        });
+      } else if (command === "crosskick") {
+        const reason = args.slice(2).join(" ") || "No reason provided";
+        await executeCrossKick({
+          userId,
+          reason,
+          staffName: message.author.username,
+          imageUrl,
           replyTarget: message,
         });
       }
@@ -346,7 +370,13 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName, guild, member } = interaction;
-  const validCommands = ["crossmute", "crossunmute", "crossban", "crossunban"];
+  const validCommands = [
+    "crossmute",
+    "crossunmute",
+    "crossban",
+    "crossunban",
+    "crosskick",
+  ];
   if (!validCommands.includes(commandName)) return;
 
   const config = getGuildConfig(guild.id);
@@ -395,6 +425,14 @@ client.on("interactionCreate", async (interaction) => {
       userId,
       reason,
       staffName,
+      replyTarget: interaction,
+    });
+  } else if (commandName === "crosskick") {
+    await executeCrossKick({
+      userId,
+      reason,
+      staffName,
+      imageUrl,
       replyTarget: interaction,
     });
   }
@@ -685,6 +723,83 @@ async function executeCrossUnban({ userId, reason, staffName, replyTarget }) {
     replyTarget,
     progressMsg,
     `✅ Cross-unban complete. Unbanned **${user.username}** in **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
+  );
+}
+
+async function executeCrossKick({
+  userId,
+  reason,
+  staffName,
+  imageUrl = null,
+  replyTarget,
+}) {
+  const configs = getAllGuildConfigs().filter((c) => c.guildId);
+  const user = await client.users.fetch(userId).catch(() => null);
+  if (!user)
+    return sendReply(
+      replyTarget,
+      `❌ Could not find user with ID \`${userId}\`.`,
+    );
+
+  const progressMsg = await sendReply(
+    replyTarget,
+    `🔍 Searching for **${user.username}** in ${configs.length} server(s)...`,
+  );
+
+  crossActionInProgress.add(userId);
+  setTimeout(() => crossActionInProgress.delete(userId), 30_000);
+
+  const results = [];
+  for (const c of configs) {
+    const guild = client.guilds.cache.get(c.guildId);
+    if (!guild) {
+      results.push({
+        name: c.guildId,
+        id: c.guildId,
+        status: "⚠️ Bot not in guild",
+      });
+      continue;
+    }
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) {
+      results.push({
+        name: guild.name,
+        id: guild.id,
+        status: "➖ Not a member",
+      });
+      continue;
+    }
+    try {
+      await member.kick(reason);
+      results.push({ name: guild.name, id: guild.id, status: "✅ Kicked" });
+    } catch (err) {
+      results.push({
+        name: guild.name,
+        id: guild.id,
+        status: `❌ Failed: ${err.message}`,
+      });
+    }
+  }
+
+  await logCrossAction({
+    configs,
+    user,
+    results,
+    type: "Cross-Kick",
+    emoji: "👢🌐",
+    color: 0xff8c00,
+    reason,
+    duration: "N/A",
+    staffName,
+    imageUrl,
+    filePrefix: "crosskick",
+  });
+
+  const successCount = results.filter((r) => r.status === "✅ Kicked").length;
+  await editReply(
+    replyTarget,
+    progressMsg,
+    `👢 Cross-kick complete. Kicked **${user.username}** from **${successCount}/${configs.length}** servers.\n\n${results.map((r) => `**${r.name}**: ${r.status}`).join("\n")}`,
   );
 }
 
