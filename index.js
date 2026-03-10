@@ -28,15 +28,6 @@ const client = new Client({
 });
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-// GUILD_CONFIGS format:
-// {
-//   "guildId": {
-//     "channelId": "reportsChannelId",
-//     "appealsChannelId": "appealsChannelId",
-//     "prefix": "!",
-//     "adminRoles": ["roleId1", "roleId2"]
-//   }
-// }
 
 function getGuildConfig(guildId) {
   if (process.env.GUILD_CONFIGS) {
@@ -408,7 +399,6 @@ client.on("messageCreate", async (message) => {
 // ─── SLASH COMMAND HANDLER ────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
-  // ── Button handler ──
   if (interaction.isButton()) {
     await handleAppealButton(interaction);
     return;
@@ -492,19 +482,15 @@ client.on("interactionCreate", async (interaction) => {
 
 async function handleAppealButton(interaction) {
   const { customId, guild, member } = interaction;
-
-  // customId format: appeal_accept_mute_{userId} or appeal_reject_mute_{userId}
   if (!customId.startsWith("appeal_")) return;
 
+  // customId format: appeal_accept_mute_{userId} or appeal_reject_mute_{userId}
   const parts = customId.split("_");
-  // parts: ["appeal", "accept"|"reject", "mute"|"ban", userId]
   const action = parts[1]; // accept or reject
   const type = parts[2]; // mute or ban
   const userId = parts[3];
 
   const config = getGuildConfig(guild.id);
-
-  // Check if staff member has permission
   if (!hasAdminRole(member, config?.adminRoles ?? [])) {
     return interaction.reply({
       content: "❌ You don't have permission to approve or reject appeals.",
@@ -519,9 +505,7 @@ async function handleAppealButton(interaction) {
 
   if (action === "accept") {
     const user = await client.users.fetch(userId).catch(() => null);
-    const username = user?.username ?? userId;
 
-    // Execute the appropriate cross-action
     if (type === "mute") {
       await executeCrossUnmute({
         userId,
@@ -538,7 +522,6 @@ async function handleAppealButton(interaction) {
       });
     }
 
-    // Update embed to show accepted
     const updatedEmbed = EmbedBuilder.from(originalEmbed)
       .setColor(Colors.Green)
       .addFields({ name: "✅ Approved by", value: staffName });
@@ -556,18 +539,22 @@ async function handleAppealButton(interaction) {
         .setDisabled(true),
     );
 
+    // Keep the View History link button if it exists
+    const linkButton = interaction.message.components[0]?.components?.find(
+      (c) => c.style === ButtonStyle.Link,
+    );
+    if (linkButton) {
+      disabledRow.addComponents(ButtonBuilder.from(linkButton));
+    }
+
     await interaction.editReply({
       embeds: [updatedEmbed],
       components: [disabledRow],
     });
     console.log(
-      `[appeal] Accepted ${type} appeal for ${username} by ${staffName}`,
+      `[appeal] Accepted ${type} appeal for ${user?.username ?? userId} by ${staffName}`,
     );
   } else if (action === "reject") {
-    const user = await client.users.fetch(userId).catch(() => null);
-    const username = user?.username ?? userId;
-
-    // Update embed to show rejected
     const updatedEmbed = EmbedBuilder.from(originalEmbed)
       .setColor(Colors.Red)
       .addFields({ name: "❌ Rejected by", value: staffName });
@@ -585,12 +572,19 @@ async function handleAppealButton(interaction) {
         .setDisabled(true),
     );
 
+    const linkButton = interaction.message.components[0]?.components?.find(
+      (c) => c.style === ButtonStyle.Link,
+    );
+    if (linkButton) {
+      disabledRow.addComponents(ButtonBuilder.from(linkButton));
+    }
+
     await interaction.editReply({
       embeds: [updatedEmbed],
       components: [disabledRow],
     });
     console.log(
-      `[appeal] Rejected ${type} appeal for ${username} by ${staffName}`,
+      `[appeal] Rejected ${type} appeal for ${userId} by ${staffName}`,
     );
   }
 }
@@ -679,17 +673,13 @@ async function executeCrossMute({
     filePrefix: "crossmute",
   });
 
-  // DM the user with appeal form link
   await user
     .send(
       `🔇 You have been **cross-muted** across multiple servers.\n` +
-        `**Reason:** ${reason}\n` +
-        `**Duration:** ${durationStr}\n\n` +
+        `**Reason:** ${reason}\n**Duration:** ${durationStr}\n\n` +
         `If you believe this was a mistake, you can appeal here:\n${CROSSMUTE_FORM}`,
     )
-    .catch(() =>
-      console.log(`[dm] Could not DM ${user.username} — DMs likely closed`),
-    );
+    .catch(() => console.log(`[dm] Could not DM ${user.username}`));
 
   const successCount = results.filter((r) => r.status === "✅ Muted").length;
   if (progressMsg)
@@ -836,16 +826,13 @@ async function executeCrossBan({
     filePrefix: "crossban",
   });
 
-  // DM the user with appeal form link
   await user
     .send(
       `🔨 You have been **cross-banned** from multiple servers.\n` +
         `**Reason:** ${reason}\n\n` +
         `If you believe this was a mistake, you can appeal here:\n${CROSSBAN_FORM}`,
     )
-    .catch(() =>
-      console.log(`[dm] Could not DM ${user.username} — DMs likely closed`),
-    );
+    .catch(() => console.log(`[dm] Could not DM ${user.username}`));
 
   const successCount = results.filter((r) => r.status === "✅ Banned").length;
   if (progressMsg)
@@ -1018,8 +1005,8 @@ async function executeCrossCheck({ userId, replyTarget }) {
   const accountAge = Math.floor(
     (Date.now() - user.createdTimestamp) / 86400000,
   );
-
   const lines = [];
+
   for (const c of configs) {
     const guild = client.guilds.cache.get(c.guildId);
     if (!guild) {
@@ -1029,7 +1016,6 @@ async function executeCrossCheck({ userId, replyTarget }) {
 
     const member = await guild.members.fetch(userId).catch(() => null);
     if (!member) {
-      // Check if they're banned
       const ban = await guild.bans.fetch(userId).catch(() => null);
       if (ban) {
         lines.push(
@@ -1105,8 +1091,7 @@ async function handleAppealSubmission({
     .addFields(
       { name: "User", value: `${displayName} (\`${userId}\`)` },
       {
-        name:
-          "1. Why did you get " + (type === "mute" ? "muted" : "banned") + "?",
+        name: `1. Why did you get ${type === "mute" ? "muted" : "banned"}?`,
         value: whyMutedBanned || "No answer",
       },
       {
@@ -1120,17 +1105,6 @@ async function handleAppealSubmission({
     )
     .setTimestamp();
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`appeal_accept_${type}_${userId}`)
-      .setLabel("Approve")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`appeal_reject_${type}_${userId}`)
-      .setLabel("Reject")
-      .setStyle(ButtonStyle.Danger),
-  );
-
   for (const c of configs) {
     const guild = client.guilds.cache.get(c.guildId);
     if (!guild) continue;
@@ -1142,6 +1116,50 @@ async function handleAppealSubmission({
       console.warn(`[appeal] Appeals channel not found in guild ${guild.name}`);
       continue;
     }
+
+    // Find user's thread in reports channel for View History button
+    let threadUrl = null;
+    if (c.channelId) {
+      const reportsChannel = await guild.channels
+        .fetch(c.channelId)
+        .catch(() => null);
+      if (reportsChannel) {
+        const active = await reportsChannel.threads
+          .fetchActive()
+          .catch(() => null);
+        let thread = active?.threads.find((t) => t.name.startsWith(userId));
+        if (!thread) {
+          const archived = await reportsChannel.threads
+            .fetchArchived({ fetchAll: true })
+            .catch(() => null);
+          thread = archived?.threads.find((t) => t.name.startsWith(userId));
+        }
+        if (thread)
+          threadUrl = `https://discord.com/channels/${guild.id}/${thread.id}`;
+      }
+    }
+
+    const buttons = [
+      new ButtonBuilder()
+        .setCustomId(`appeal_accept_${type}_${userId}`)
+        .setLabel("Approve")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`appeal_reject_${type}_${userId}`)
+        .setLabel("Reject")
+        .setStyle(ButtonStyle.Danger),
+    ];
+
+    if (threadUrl) {
+      buttons.push(
+        new ButtonBuilder()
+          .setLabel("View History")
+          .setStyle(ButtonStyle.Link)
+          .setURL(threadUrl),
+      );
+    }
+
+    const row = new ActionRowBuilder().addComponents(...buttons);
 
     await appealsChannel.send({ embeds: [embed], components: [row] });
     console.log(
@@ -1163,7 +1181,6 @@ app.post("/appeal", async (req, res) => {
 
   const { type, userId, username, whyMutedBanned, whyAccept, additional } =
     req.body;
-
   if (!type || !userId) {
     return res
       .status(400)
@@ -1172,7 +1189,6 @@ app.post("/appeal", async (req, res) => {
 
   res.status(200).json({ ok: true });
 
-  // Handle async without blocking the response
   handleAppealSubmission({
     type,
     userId,
