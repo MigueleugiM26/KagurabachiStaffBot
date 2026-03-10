@@ -233,7 +233,10 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
       `[${type.toLowerCase()}] Logged for ${user.username} (${user.id}) in guild ${guild.id} (${guild.name}) | staff: ${staffName}`,
     );
   } catch (err) {
-    console.error(`[${type?.toLowerCase() ?? "audit"}] Error:`, err);
+    console.error(
+      `[${type?.toLowerCase() ?? "audit"}] Error in guild ${guild.id} (${guild.name}):`,
+      err,
+    );
   }
 });
 
