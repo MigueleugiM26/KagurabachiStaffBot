@@ -24,12 +24,24 @@ const client = new Client({
 // Example: {"123456789": "987654321", "111222333": "444555666"}
 // Falls back to legacy single-server REPORTS_CHANNEL_ID if GUILD_CONFIGS is not set.
 
-function getReportsChannelId(guildId) {
+function getGuildConfig(guildId) {
   if (process.env.GUILD_CONFIGS) {
     const configs = JSON.parse(process.env.GUILD_CONFIGS);
-    return configs[guildId] ?? null;
+    const entry = configs[guildId];
+    if (!entry) return null;
+    // Support both old format {"guildId":"channelId"} and new {"guildId":{"channelId":"...","prefix":"..."}}
+    if (typeof entry === "string")
+      return { channelId: entry, prefix: process.env.COMMAND_PREFIX || "!" };
+    return { channelId: entry.channelId, prefix: entry.prefix || "!" };
   }
-  return process.env.REPORTS_CHANNEL_ID ?? null;
+  return {
+    channelId: process.env.REPORTS_CHANNEL_ID,
+    prefix: process.env.COMMAND_PREFIX || "!",
+  };
+}
+
+function getReportsChannelId(guildId) {
+  return getGuildConfig(guildId)?.channelId ?? null;
 }
 
 // Stores { url, staffName, timestamp } keyed by "guildId:userId"
@@ -55,7 +67,10 @@ client.once("ready", () => {
 client.on("messageCreate", async (message) => {
   if (!message.guild || message.author.bot) return;
 
-  const prefix = process.env.COMMAND_PREFIX || "!";
+  const config = getGuildConfig(message.guild.id);
+  if (!config) return;
+  const prefix = config.prefix;
+
   if (!message.content.startsWith(prefix)) return;
 
   const args = message.content.slice(prefix.length).trim().split(/\s+/);
