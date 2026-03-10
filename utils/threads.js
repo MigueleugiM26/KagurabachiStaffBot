@@ -4,6 +4,7 @@
  *
  * Thread name format: "{userId} ({username})"
  * Searching by ID prefix ensures renames don't break lookups.
+ * If an existing thread has a stale name, it will be renamed automatically.
  */
 async function findOrCreateThread(reportsChannel, user) {
   const threadName = `${user.id} (${user.username})`;
@@ -49,6 +50,17 @@ async function findOrCreateThread(reportsChannel, user) {
     }
 
     console.log(`[threads] Created new thread: ${threadName}`);
+    return thread;
+  }
+
+  // 4. Rename if the name is outdated (e.g. missing username, or username changed)
+  if (thread.name !== threadName) {
+    console.log(`[threads] Renaming thread "${thread.name}" → "${threadName}"`);
+    await thread
+      .setName(threadName)
+      .catch((err) =>
+        console.error(`[threads] Failed to rename thread: ${err.message}`),
+      );
   }
 
   return thread;

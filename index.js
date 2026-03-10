@@ -29,71 +29,133 @@ const client = new Client({
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 
-function getGuildConfig(guildId) {
-  if (process.env.GUILD_CONFIGS) {
-    const configs = JSON.parse(process.env.GUILD_CONFIGS);
-    const entry = configs[guildId];
-    if (!entry) return null;
-    if (typeof entry === "string")
-      return {
-        channelId: entry,
-        appealsChannelId: null,
-        prefix: process.env.COMMAND_PREFIX || "!",
-        adminRoles: [],
-      };
-    return {
-      channelId: entry.channelId,
-      appealsChannelId: entry.appealsChannelId ?? null,
-      prefix: entry.prefix || "!",
-      adminRoles: entry.adminRoles || [],
-    };
-  }
+/**
+ * Reads per-guild config from individual env vars (preferred) or the legacy
+ * GUILD_CONFIGS JSON blob (still supported for backward compatibility).
+ *
+ * New format (see .env.example):
+ *   GUILD_IDS=id1,id2
+ *   GUILD_<ID>_CHANNEL_ID=...
+ *   GUILD_<ID>_APPEALS_CHANNEL_ID=...
+ *   GUILD_<ID>_PREFIX=?
+ *   GUILD_<ID>_TIER1_ROLES=roleId,roleId
+ *   GUILD_<ID>_TIER2_ROLES=roleId
+ *   GUILD_<ID>_TIER3_ROLES=roleId
+ */
+function readGuildEntry(guildId) {
+  const prefix = `GUILD_${guildId}_`;
+  const channelId = process.env[`${prefix}CHANNEL_ID`];
+  if (!channelId) return null;
+
+  const splitRoles = (key) =>
+    (process.env[key] || "")
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean);
+
   return {
-    channelId: process.env.REPORTS_CHANNEL_ID,
-    appealsChannelId: process.env.APPEALS_CHANNEL_ID ?? null,
-    prefix: process.env.COMMAND_PREFIX || "!",
-    adminRoles: [],
+    guildId,
+    channelId,
+    appealsChannelId: process.env[`${prefix}APPEALS_CHANNEL_ID`] ?? null,
+    prefix: process.env[`${prefix}PREFIX`] || "!",
+    tier1Roles: splitRoles(`${prefix}TIER1_ROLES`),
+    tier2Roles: splitRoles(`${prefix}TIER2_ROLES`),
+    tier3Roles: splitRoles(`${prefix}TIER3_ROLES`),
+  };
+}
+
+function normalizeLegacyEntry(guildId, entry) {
+  // Legacy adminRoles → tier3Roles (full access)
+  const adminRoles = typeof entry === "string" ? [] : entry.adminRoles || [];
+  return {
+    guildId,
+    channelId: typeof entry === "string" ? entry : entry.channelId,
+    appealsChannelId:
+      typeof entry === "string" ? null : (entry.appealsChannelId ?? null),
+    prefix:
+      typeof entry === "string"
+        ? process.env.COMMAND_PREFIX || "!"
+        : entry.prefix || "!",
+    tier1Roles: [],
+    tier2Roles: [],
+    tier3Roles: adminRoles,
   };
 }
 
 function getAllGuildConfigs() {
+  // ── New per-guild env vars ──
+  if (process.env.GUILD_IDS) {
+    return process.env.GUILD_IDS.split(",")
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .map(readGuildEntry)
+      .filter(Boolean);
+  }
+
+  // ── Legacy JSON blob ──
   if (process.env.GUILD_CONFIGS) {
     const configs = JSON.parse(process.env.GUILD_CONFIGS);
-    return Object.entries(configs).map(([guildId, entry]) => ({
-      guildId,
-      ...(typeof entry === "string"
-        ? {
-            channelId: entry,
-            appealsChannelId: null,
-            prefix: "!",
-            adminRoles: [],
-          }
-        : {
-            channelId: entry.channelId,
-            appealsChannelId: entry.appealsChannelId ?? null,
-            prefix: entry.prefix || "!",
-            adminRoles: entry.adminRoles || [],
-          }),
-    }));
+    return Object.entries(configs).map(([guildId, entry]) =>
+      normalizeLegacyEntry(guildId, entry),
+    );
   }
+
+  // ── Single-guild fallback ──
   return [
     {
       guildId: null,
       channelId: process.env.REPORTS_CHANNEL_ID,
       appealsChannelId: process.env.APPEALS_CHANNEL_ID ?? null,
       prefix: process.env.COMMAND_PREFIX || "!",
-      adminRoles: [],
+      tier1Roles: [],
+      tier2Roles: [],
+      tier3Roles: [],
     },
   ];
+}
+
+function getGuildConfig(guildId) {
+  return getAllGuildConfigs().find((c) => c.guildId === guildId) ?? null;
 }
 
 function getReportsChannelId(guildId) {
   return getGuildConfig(guildId)?.channelId ?? null;
 }
 
-function hasAdminRole(member, adminRoles) {
-  if (!adminRoles || adminRoles.length === 0) return true;
-  return member.roles.cache.some((r) => adminRoles.includes(r.id));
+// ─── PERMISSION TIERS ─────────────────────────────────────────────────────────
+
+/**
+ * Which tier is required to run each cross-command.
+ *   Tier 1 → crosscheck, crosskick
+ *   Tier 2 → crossmute, crossunmute  (+ everything in tier 1)
+ *   Tier 3 → crossban, crossunban    (+ everything in tier 1 & 2)
+ */
+const COMMAND_TIERS = {
+  crosscheck: 1,
+  crosskick: 1,
+  crossmute: 2,
+  crossunmute: 2,
+  crossban: 3,
+  crossunban: 3,
+};
+
+/**
+ * Returns true if the member holds a role that grants access to the given
+ * command.  A tier-N role grants access to all commands at tier N and below,
+ * so we check tier N, N+1, … 3.
+ *
+ * If *no* roles are configured at any relevant tier, access is open to all.
+ */
+function hasTierAccess(member, config, command) {
+  const requiredTier = COMMAND_TIERS[command] ?? 3;
+
+  const allowedRoles = [];
+  for (let tier = requiredTier; tier <= 3; tier++) {
+    allowedRoles.push(...(config[`tier${tier}Roles`] || []));
+  }
+
+  if (allowedRoles.length === 0) return true; // no restrictions configured
+  return member.roles.cache.some((r) => allowedRoles.includes(r.id));
 }
 
 const CROSS_PREFIX = process.env.CROSS_PREFIX || "&";
@@ -245,9 +307,9 @@ client.on("messageCreate", async (message) => {
     ];
 
     if (validCrossCommands.includes(command)) {
-      if (!hasAdminRole(message.member, config.adminRoles)) {
+      if (!hasTierAccess(message.member, config, command)) {
         return message.reply(
-          "❌ You don't have permission to use cross-commands.",
+          "❌ You don't have permission to use this cross-command.",
         );
       }
 
@@ -260,6 +322,9 @@ client.on("messageCreate", async (message) => {
 
       const attachment = message.attachments.first();
       const imageUrl = attachment?.url ?? null;
+      const sourceGuild = { id: message.guild.id, name: message.guild.name };
+      const staffName = message.author.username;
+      const staffId = message.author.id;
 
       if (command === "crossmute") {
         const durationStr = args[2];
@@ -272,8 +337,10 @@ client.on("messageCreate", async (message) => {
           userId,
           durationStr,
           reason,
-          staffName: message.author.username,
+          staffName,
+          staffId,
           imageUrl,
+          sourceGuild,
           replyTarget: message,
         });
       } else if (command === "crossunmute") {
@@ -281,7 +348,9 @@ client.on("messageCreate", async (message) => {
         await executeCrossUnmute({
           userId,
           reason,
-          staffName: message.author.username,
+          staffName,
+          staffId,
+          sourceGuild,
           replyTarget: message,
         });
       } else if (command === "crossban") {
@@ -289,8 +358,10 @@ client.on("messageCreate", async (message) => {
         await executeCrossBan({
           userId,
           reason,
-          staffName: message.author.username,
+          staffName,
+          staffId,
           imageUrl,
+          sourceGuild,
           replyTarget: message,
         });
       } else if (command === "crossunban") {
@@ -298,7 +369,9 @@ client.on("messageCreate", async (message) => {
         await executeCrossUnban({
           userId,
           reason,
-          staffName: message.author.username,
+          staffName,
+          staffId,
+          sourceGuild,
           replyTarget: message,
         });
       } else if (command === "crosskick") {
@@ -306,12 +379,19 @@ client.on("messageCreate", async (message) => {
         await executeCrossKick({
           userId,
           reason,
-          staffName: message.author.username,
+          staffName,
+          staffId,
           imageUrl,
+          sourceGuild,
           replyTarget: message,
         });
       } else if (command === "crosscheck") {
-        await executeCrossCheck({ userId, replyTarget: message });
+        await executeCrossCheck({
+          userId,
+          staffId,
+          sourceGuild,
+          replyTarget: message,
+        });
       }
       return;
     }
@@ -353,6 +433,7 @@ client.on("messageCreate", async (message) => {
   );
   pendingData.set(key, {
     staffName: message.author.username,
+    staffId: message.author.id,
     reason: parsedReason,
     url: attachment?.url ?? null,
     timestamp: Date.now(),
@@ -384,6 +465,7 @@ client.on("messageCreate", async (message) => {
         reason,
         duration: "N/A",
         staffName: message.author.username,
+        staffId: message.author.id,
         imageUrl: attachment?.url ?? null,
       });
       await thread.send({ embeds: [embed] });
@@ -418,9 +500,15 @@ client.on("interactionCreate", async (interaction) => {
   if (!validCommands.includes(commandName)) return;
 
   const config = getGuildConfig(guild.id);
-  if (!hasAdminRole(member, config?.adminRoles ?? [])) {
+  if (
+    !hasTierAccess(
+      member,
+      config ?? { tier1Roles: [], tier2Roles: [], tier3Roles: [] },
+      commandName,
+    )
+  ) {
     return interaction.reply({
-      content: "❌ You don't have permission to use cross-commands.",
+      content: "❌ You don't have permission to use this cross-command.",
       ephemeral: true,
     });
   }
@@ -431,7 +519,9 @@ client.on("interactionCreate", async (interaction) => {
   const reason =
     interaction.options.getString("reason") || "No reason provided";
   const staffName = member.user.username;
+  const staffId = member.user.id;
   const imageUrl = interaction.options.getAttachment?.("image")?.url ?? null;
+  const sourceGuild = { id: guild.id, name: guild.name };
 
   if (commandName === "crossmute") {
     const durationStr = interaction.options.getString("duration");
@@ -440,7 +530,9 @@ client.on("interactionCreate", async (interaction) => {
       durationStr,
       reason,
       staffName,
+      staffId,
       imageUrl,
+      sourceGuild,
       replyTarget: interaction,
     });
   } else if (commandName === "crossunmute") {
@@ -448,6 +540,8 @@ client.on("interactionCreate", async (interaction) => {
       userId,
       reason,
       staffName,
+      staffId,
+      sourceGuild,
       replyTarget: interaction,
     });
   } else if (commandName === "crossban") {
@@ -455,7 +549,9 @@ client.on("interactionCreate", async (interaction) => {
       userId,
       reason,
       staffName,
+      staffId,
       imageUrl,
+      sourceGuild,
       replyTarget: interaction,
     });
   } else if (commandName === "crossunban") {
@@ -463,6 +559,8 @@ client.on("interactionCreate", async (interaction) => {
       userId,
       reason,
       staffName,
+      staffId,
+      sourceGuild,
       replyTarget: interaction,
     });
   } else if (commandName === "crosskick") {
@@ -470,11 +568,18 @@ client.on("interactionCreate", async (interaction) => {
       userId,
       reason,
       staffName,
+      staffId,
       imageUrl,
+      sourceGuild,
       replyTarget: interaction,
     });
   } else if (commandName === "crosscheck") {
-    await executeCrossCheck({ userId, replyTarget: interaction });
+    await executeCrossCheck({
+      userId,
+      staffId,
+      sourceGuild,
+      replyTarget: interaction,
+    });
   }
 });
 
@@ -491,7 +596,14 @@ async function handleAppealButton(interaction) {
   const userId = parts[3];
 
   const config = getGuildConfig(guild.id);
-  if (!hasAdminRole(member, config?.adminRoles ?? [])) {
+  // Appeal buttons require at least tier-3 access (full admin)
+  if (
+    !hasTierAccess(
+      member,
+      config ?? { tier1Roles: [], tier2Roles: [], tier3Roles: [] },
+      "crossban",
+    )
+  ) {
     return interaction.reply({
       content: "❌ You don't have permission to approve or reject appeals.",
       ephemeral: true,
@@ -502,6 +614,7 @@ async function handleAppealButton(interaction) {
 
   const originalEmbed = interaction.message.embeds[0];
   const staffName = member.user.username;
+  const staffId = member.user.id;
 
   if (action === "accept") {
     const user = await client.users.fetch(userId).catch(() => null);
@@ -511,6 +624,8 @@ async function handleAppealButton(interaction) {
         userId,
         reason: "Appeal accepted",
         staffName,
+        staffId,
+        sourceGuild: { id: guild.id, name: guild.name },
         replyTarget: null,
       });
     } else if (type === "ban") {
@@ -518,13 +633,18 @@ async function handleAppealButton(interaction) {
         userId,
         reason: "Appeal accepted",
         staffName,
+        staffId,
+        sourceGuild: { id: guild.id, name: guild.name },
         replyTarget: null,
       });
     }
 
     const updatedEmbed = EmbedBuilder.from(originalEmbed)
       .setColor(Colors.Green)
-      .addFields({ name: "✅ Approved by", value: staffName });
+      .addFields({
+        name: "✅ Approved by",
+        value: `<@${staffId}> (${staffName})`,
+      });
 
     const disabledRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -552,12 +672,15 @@ async function handleAppealButton(interaction) {
       components: [disabledRow],
     });
     console.log(
-      `[appeal] Accepted ${type} appeal for ${user?.username ?? userId} by ${staffName}`,
+      `[appeal] Accepted ${type} appeal for ${user?.username ?? userId} by ${staffName} (${staffId})`,
     );
   } else if (action === "reject") {
     const updatedEmbed = EmbedBuilder.from(originalEmbed)
       .setColor(Colors.Red)
-      .addFields({ name: "❌ Rejected by", value: staffName });
+      .addFields({
+        name: "❌ Rejected by",
+        value: `<@${staffId}> (${staffName})`,
+      });
 
     const disabledRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -584,7 +707,7 @@ async function handleAppealButton(interaction) {
       components: [disabledRow],
     });
     console.log(
-      `[appeal] Rejected ${type} appeal for ${userId} by ${staffName}`,
+      `[appeal] Rejected ${type} appeal for ${userId} by ${staffName} (${staffId})`,
     );
   }
 }
@@ -596,7 +719,9 @@ async function executeCrossMute({
   durationStr,
   reason,
   staffName,
+  staffId,
   imageUrl = null,
+  sourceGuild,
   replyTarget,
 }) {
   const ms = parseDuration(durationStr);
@@ -669,7 +794,9 @@ async function executeCrossMute({
     reason,
     duration: durationStr,
     staffName,
+    staffId,
     imageUrl,
+    sourceGuild,
     filePrefix: "crossmute",
   });
 
@@ -690,7 +817,14 @@ async function executeCrossMute({
     );
 }
 
-async function executeCrossUnmute({ userId, reason, staffName, replyTarget }) {
+async function executeCrossUnmute({
+  userId,
+  reason,
+  staffName,
+  staffId,
+  sourceGuild,
+  replyTarget,
+}) {
   const configs = getAllGuildConfigs().filter((c) => c.guildId);
   const user = await client.users.fetch(userId).catch(() => null);
   if (!user)
@@ -751,7 +885,9 @@ async function executeCrossUnmute({ userId, reason, staffName, replyTarget }) {
     reason,
     duration: "N/A",
     staffName,
+    staffId,
     imageUrl: null,
+    sourceGuild,
     filePrefix: "crossunmute",
   });
 
@@ -768,7 +904,9 @@ async function executeCrossBan({
   userId,
   reason,
   staffName,
+  staffId,
   imageUrl = null,
+  sourceGuild,
   replyTarget,
 }) {
   const configs = getAllGuildConfigs().filter((c) => c.guildId);
@@ -822,7 +960,9 @@ async function executeCrossBan({
     reason,
     duration: "Permanent",
     staffName,
+    staffId,
     imageUrl,
+    sourceGuild,
     filePrefix: "crossban",
   });
 
@@ -843,7 +983,14 @@ async function executeCrossBan({
     );
 }
 
-async function executeCrossUnban({ userId, reason, staffName, replyTarget }) {
+async function executeCrossUnban({
+  userId,
+  reason,
+  staffName,
+  staffId,
+  sourceGuild,
+  replyTarget,
+}) {
   const configs = getAllGuildConfigs().filter((c) => c.guildId);
   const user = await client.users.fetch(userId).catch(() => null);
   if (!user)
@@ -895,7 +1042,9 @@ async function executeCrossUnban({ userId, reason, staffName, replyTarget }) {
     reason,
     duration: "N/A",
     staffName,
+    staffId,
     imageUrl: null,
+    sourceGuild,
     filePrefix: "crossunban",
   });
 
@@ -912,7 +1061,9 @@ async function executeCrossKick({
   userId,
   reason,
   staffName,
+  staffId,
   imageUrl = null,
+  sourceGuild,
   replyTarget,
 }) {
   const configs = getAllGuildConfigs().filter((c) => c.guildId);
@@ -975,7 +1126,9 @@ async function executeCrossKick({
     reason,
     duration: "N/A",
     staffName,
+    staffId,
     imageUrl,
+    sourceGuild,
     filePrefix: "crosskick",
   });
 
@@ -988,7 +1141,12 @@ async function executeCrossKick({
     );
 }
 
-async function executeCrossCheck({ userId, replyTarget }) {
+async function executeCrossCheck({
+  userId,
+  staffId,
+  sourceGuild,
+  replyTarget,
+}) {
   const user = await client.users.fetch(userId).catch(() => null);
   if (!user)
     return sendReply(
@@ -1057,6 +1215,21 @@ async function executeCrossCheck({ userId, replyTarget }) {
       },
     )
     .setTimestamp();
+
+  if (sourceGuild) {
+    embed.addFields({
+      name: "Requested from",
+      value: `${sourceGuild.name} (\`${sourceGuild.id}\`)`,
+      inline: false,
+    });
+  }
+  if (staffId) {
+    embed.addFields({
+      name: "Requested by",
+      value: `<@${staffId}>`,
+      inline: true,
+    });
+  }
 
   await editReply(replyTarget, progressMsg, { content: "", embeds: [embed] });
 }
@@ -1168,45 +1341,150 @@ async function handleAppealSubmission({
   }
 }
 
-// ─── EXPRESS WEBHOOK SERVER ───────────────────────────────────────────────────
+// ─── SHARED LOGGING ───────────────────────────────────────────────────────────
 
-const app = express();
-app.use(express.json());
+async function logCrossAction({
+  configs,
+  user,
+  results,
+  type,
+  emoji,
+  color,
+  reason,
+  duration,
+  staffName,
+  staffId,
+  imageUrl,
+  sourceGuild,
+  filePrefix,
+}) {
+  const date = new Date().toISOString().slice(0, 10);
+  const fileName = `${filePrefix}_servers_${user.username}_${date}.txt`;
+  const successCount = results.filter((r) => r.status.startsWith("✅")).length;
 
-app.post("/appeal", async (req, res) => {
-  const secret = req.headers["x-webhook-secret"];
-  if (secret !== WEBHOOK_SECRET) {
-    return res.status(401).json({ error: "Unauthorized" });
+  for (const c of configs) {
+    if (!c.channelId) continue;
+    const guild = client.guilds.cache.get(c.guildId);
+    if (!guild) continue;
+
+    const reportsChannel = await guild.channels
+      .fetch(c.channelId)
+      .catch(() => null);
+    if (!reportsChannel) continue;
+
+    const thread = await findOrCreateThread(reportsChannel, user).catch(
+      () => null,
+    );
+    if (!thread) continue;
+
+    const embed = buildEmbed({
+      type,
+      emoji,
+      color,
+      reason,
+      duration,
+      staffName,
+      staffId,
+      imageUrl,
+      sourceGuild,
+      extraField: {
+        name: "Servers Affected",
+        value: `${successCount}/${configs.length}`,
+      },
+    });
+
+    await thread
+      .send({
+        embeds: [embed],
+        files: [
+          {
+            name: fileName,
+            attachment: Buffer.from(buildServerList(results, type)),
+          },
+        ],
+      })
+      .catch(console.error);
+  }
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+function buildEmbed({
+  type,
+  emoji,
+  color,
+  reason,
+  duration,
+  staffName,
+  staffId,
+  imageUrl,
+  sourceGuild,
+  extraField,
+}) {
+  const staffValue = staffId ? `<@${staffId}> (${staffName})` : staffName;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`${emoji}  ${type}  ·  ${duration}`)
+    .setColor(color)
+    .addFields(
+      { name: "Reason", value: reason },
+      { name: "Staff", value: staffValue },
+    )
+    .setTimestamp();
+
+  if (sourceGuild) {
+    embed.addFields({
+      name: "Server",
+      value: `${sourceGuild.name} (\`${sourceGuild.id}\`)`,
+      inline: false,
+    });
   }
 
-  const { type, userId, username, whyMutedBanned, whyAccept, additional } =
-    req.body;
-  if (!type || !userId) {
-    return res
-      .status(400)
-      .json({ error: "Missing required fields: type, userId" });
+  if (extraField) embed.addFields(extraField);
+  if (imageUrl) embed.setImage(imageUrl);
+  return embed;
+}
+
+function buildServerList(results, actionType) {
+  const lines = results.map((r) => `${r.status}  |  ${r.name}  (${r.id})`);
+  const timestamp = new Date().toUTCString();
+  return `${actionType} — Server Report\nGenerated: ${timestamp}\n${"─".repeat(50)}\n${lines.join("\n")}`;
+}
+
+function parseDuration(str) {
+  if (!str) return null;
+  const match = str.match(/^(\d+)(s|m|h|d|w)$/i);
+  if (!match) return null;
+  const n = parseInt(match[1]);
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    s: 1000,
+    m: 60000,
+    h: 3600000,
+    d: 86400000,
+    w: 604800000,
+  };
+  return n * multipliers[unit];
+}
+
+async function sendReply(target, content) {
+  if (!target) return null;
+  if (target.deferred || target.replied) return target.editReply(content);
+  return target.reply(content);
+}
+
+async function editReply(target, progressMsg, content) {
+  if (!target) return;
+  try {
+    if (target.deferred || target.replied) {
+      await target.editReply(content);
+    } else if (progressMsg?.edit) {
+      await progressMsg.edit(content);
+    }
+  } catch (err) {
+    console.error("[editReply] Error:", err.message);
   }
-
-  res.status(200).json({ ok: true });
-
-  handleAppealSubmission({
-    type,
-    userId,
-    username,
-    whyMutedBanned,
-    whyAccept,
-    additional,
-  }).catch((err) => console.error("[appeal] Error handling submission:", err));
-});
-
-app.get("/health", (req, res) =>
-  res.json({ ok: true, bot: client.user?.tag ?? "not ready" }),
-);
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`🌐  Webhook server listening on port ${PORT}`),
-);
+}
 
 // ─── AUDIT LOG LISTENER ───────────────────────────────────────────────────────
 
@@ -1271,6 +1549,7 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
 
     const imageUrl = pending?.url ?? null;
     let staffName = pending?.staffName ?? null;
+    let staffId = pending?.staffId ?? null;
 
     if (!staffName) {
       try {
@@ -1278,8 +1557,10 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
         const logs = await guild.fetchAuditLogs({ limit: 5, type: action });
         const match = logs.entries.find((e) => e.target?.id === user.id);
         staffName = match?.executor?.username ?? "Unknown";
+        staffId = match?.executor?.id ?? null;
       } catch {
         staffName = "Unknown";
+        staffId = null;
       }
     }
 
@@ -1291,11 +1572,13 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
       reason: pending?.reason || reason || "No reason provided",
       duration,
       staffName,
+      staffId,
       imageUrl,
+      // Audit log events are inherently per-guild; no sourceGuild field needed
     });
     await thread.send({ embeds: [embed] });
     console.log(
-      `[${type.toLowerCase()}] Logged for ${user.username} (${user.id}) in guild ${guild.id} (${guild.name}) | staff: ${staffName}`,
+      `[${type.toLowerCase()}] Logged for ${user.username} (${user.id}) in guild ${guild.id} (${guild.name}) | staff: ${staffName} (${staffId ?? "unknown"})`,
     );
   } catch (err) {
     console.error(
@@ -1305,133 +1588,45 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
   }
 });
 
-// ─── SHARED LOGGING ───────────────────────────────────────────────────────────
+// ─── EXPRESS WEBHOOK SERVER ───────────────────────────────────────────────────
 
-async function logCrossAction({
-  configs,
-  user,
-  results,
-  type,
-  emoji,
-  color,
-  reason,
-  duration,
-  staffName,
-  imageUrl,
-  filePrefix,
-}) {
-  const date = new Date().toISOString().slice(0, 10);
-  const fileName = `${filePrefix}_servers_${user.username}_${date}.txt`;
-  const successCount = results.filter((r) => r.status.startsWith("✅")).length;
+const app = express();
+app.use(express.json());
 
-  for (const c of configs) {
-    if (!c.channelId) continue;
-    const guild = client.guilds.cache.get(c.guildId);
-    if (!guild) continue;
-
-    const reportsChannel = await guild.channels
-      .fetch(c.channelId)
-      .catch(() => null);
-    if (!reportsChannel) continue;
-
-    const thread = await findOrCreateThread(reportsChannel, user).catch(
-      () => null,
-    );
-    if (!thread) continue;
-
-    const embed = buildEmbed({
-      type,
-      emoji,
-      color,
-      reason,
-      duration,
-      staffName,
-      imageUrl,
-      extraField: {
-        name: "Servers Affected",
-        value: `${successCount}/${configs.length}`,
-      },
-    });
-
-    await thread
-      .send({
-        embeds: [embed],
-        files: [
-          {
-            name: fileName,
-            attachment: Buffer.from(buildServerList(results, type)),
-          },
-        ],
-      })
-      .catch(console.error);
+app.post("/appeal", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (secret !== WEBHOOK_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
-}
 
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
-
-function buildEmbed({
-  type,
-  emoji,
-  color,
-  reason,
-  duration,
-  staffName,
-  imageUrl,
-  extraField,
-}) {
-  const embed = new EmbedBuilder()
-    .setTitle(`${emoji}  ${type}  ·  ${duration}`)
-    .setColor(color)
-    .addFields(
-      { name: "Reason", value: reason },
-      { name: "Staff", value: staffName },
-    )
-    .setTimestamp();
-  if (extraField) embed.addFields(extraField);
-  if (imageUrl) embed.setImage(imageUrl);
-  return embed;
-}
-
-function buildServerList(results, actionType) {
-  const lines = results.map((r) => `${r.status}  |  ${r.name}  (${r.id})`);
-  const timestamp = new Date().toUTCString();
-  return `${actionType} — Server Report\nGenerated: ${timestamp}\n${"─".repeat(50)}\n${lines.join("\n")}`;
-}
-
-function parseDuration(str) {
-  if (!str) return null;
-  const match = str.match(/^(\d+)(s|m|h|d|w)$/i);
-  if (!match) return null;
-  const n = parseInt(match[1]);
-  const unit = match[2].toLowerCase();
-  const multipliers = {
-    s: 1000,
-    m: 60000,
-    h: 3600000,
-    d: 86400000,
-    w: 604800000,
-  };
-  return n * multipliers[unit];
-}
-
-async function sendReply(target, content) {
-  if (!target) return null;
-  if (target.deferred || target.replied) return target.editReply(content);
-  return target.reply(content);
-}
-
-async function editReply(target, progressMsg, content) {
-  if (!target) return;
-  try {
-    if (target.deferred || target.replied) {
-      await target.editReply(content);
-    } else if (progressMsg?.edit) {
-      await progressMsg.edit(content);
-    }
-  } catch (err) {
-    console.error("[editReply] Error:", err.message);
+  const { type, userId, username, whyMutedBanned, whyAccept, additional } =
+    req.body;
+  if (!type || !userId) {
+    return res
+      .status(400)
+      .json({ error: "Missing required fields: type, userId" });
   }
-}
+
+  res.status(200).json({ ok: true });
+
+  handleAppealSubmission({
+    type,
+    userId,
+    username,
+    whyMutedBanned,
+    whyAccept,
+    additional,
+  }).catch((err) => console.error("[appeal] Error handling submission:", err));
+});
+
+app.get("/health", (req, res) =>
+  res.json({ ok: true, bot: client.user?.tag ?? "not ready" }),
+);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () =>
+  console.log(`🌐  Webhook server listening on port ${PORT}`),
+);
 
 // ─── START ────────────────────────────────────────────────────────────────────
 
