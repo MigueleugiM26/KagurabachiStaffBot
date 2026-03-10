@@ -1,5 +1,6 @@
 {role} **{mangaName}** ({chapterName}) is out now, read it from the official site!
 <{chapterLink}>
+
 Buy Kagurabachi Volumes here:
 - [English Volumes](<https://www.amazon.com/dp/B0DK8888XT?binding=paperback&ref=dbs_m_mng_rwt_sft_tpbk_tkin>)
 - [Japanese Volumes](<https://www.shueisha.co.jp/books/search/search.html?seriesid=109106&order=1>)
