@@ -99,11 +99,17 @@ client.on("messageCreate", async (message) => {
   console.log(
     `[msg] ✅ command="${command}" target=${userId} staff=${message.author.username} guild=${message.guild.id}`,
   );
+  const hasDuration = ["mute", "timeout"].includes(command);
+  const reasonArgs = hasDuration ? args.slice(3) : args.slice(2);
+  const parsedReason = reasonArgs.join(" ") || null;
+
   pendingData.set(key, {
     staffName: message.author.username,
+    reason: parsedReason,
     url: attachment?.url ?? null,
     timestamp: Date.now(),
   });
+
   setTimeout(() => pendingData.delete(key), 15_000);
 
   // ── Handle !warn manually ──
@@ -223,7 +229,7 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
       type,
       emoji,
       color,
-      reason: reason || "No reason provided",
+      reason: pending?.reason || reason || "No reason provided",
       duration,
       staffName,
       imageUrl,
