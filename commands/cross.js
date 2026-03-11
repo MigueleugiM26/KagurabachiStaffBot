@@ -11,6 +11,31 @@ const {
 } = require("../utils/helpers");
 const { findOrCreateThread } = require("../utils/threads");
 
+/**
+ * Returns true if the target user holds a tier role in ANY configured guild.
+ * Protected users cannot be cross-actioned by staff.
+ */
+async function isProtectedUser(client, userId) {
+  const configs = getAllGuildConfigs().filter((c) => c.guildId);
+  const allTierRoles = new Set(
+    configs.flatMap((c) => [
+      ...(c.tier1Roles ?? []),
+      ...(c.tier2Roles ?? []),
+      ...(c.tier3Roles ?? []),
+    ]),
+  );
+  if (allTierRoles.size === 0) return false;
+
+  for (const c of configs) {
+    const guild = client.guilds.cache.get(c.guildId);
+    if (!guild) continue;
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) continue;
+    if (member.roles.cache.some((r) => allTierRoles.has(r.id))) return true;
+  }
+  return false;
+}
+
 const CROSSMUTE_FORM =
   process.env.CROSSMUTE_FORM_URL ||
   "https://docs.google.com/forms/d/e/1FAIpQLSemzPCO26jA4htNouc1Bafi3QULAIHcYYFRL5tEM9_xGW9ZNg/viewform";
@@ -121,6 +146,15 @@ async function executeCrossMute(
       sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
     );
 
+  if (await isProtectedUser(client, userId))
+    return (
+      replyTarget &&
+      sendReply(
+        replyTarget,
+        `❌ **${user.username}** is a staff member and cannot be cross-muted.`,
+      )
+    );
+
   const progressMsg = replyTarget
     ? await sendReply(
         replyTarget,
@@ -205,6 +239,15 @@ async function executeCrossUnmute(
     return (
       replyTarget &&
       sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
+    );
+
+  if (await isProtectedUser(client, userId))
+    return (
+      replyTarget &&
+      sendReply(
+        replyTarget,
+        `❌ **${user.username}** is a staff member and cannot be cross-unmuted.`,
+      )
     );
 
   const progressMsg = replyTarget
@@ -295,6 +338,15 @@ async function executeCrossBan(
       sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
     );
 
+  if (await isProtectedUser(client, userId))
+    return (
+      replyTarget &&
+      sendReply(
+        replyTarget,
+        `❌ **${user.username}** is a staff member and cannot be cross-banned.`,
+      )
+    );
+
   const progressMsg = replyTarget
     ? await sendReply(
         replyTarget,
@@ -370,6 +422,15 @@ async function executeCrossUnban(
     return (
       replyTarget &&
       sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
+    );
+
+  if (await isProtectedUser(client, userId))
+    return (
+      replyTarget &&
+      sendReply(
+        replyTarget,
+        `❌ **${user.username}** is a staff member and cannot be cross-unbanned.`,
+      )
     );
 
   const progressMsg = replyTarget
@@ -449,6 +510,15 @@ async function executeCrossKick(
     return (
       replyTarget &&
       sendReply(replyTarget, `❌ Could not find user with ID \`${userId}\`.`)
+    );
+
+  if (await isProtectedUser(client, userId))
+    return (
+      replyTarget &&
+      sendReply(
+        replyTarget,
+        `❌ **${user.username}** is a staff member and cannot be cross-kicked.`,
+      )
     );
 
   const progressMsg = replyTarget

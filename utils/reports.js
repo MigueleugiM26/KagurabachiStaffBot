@@ -1,5 +1,6 @@
 "use strict";
 
+const { EmbedBuilder, Colors } = require("discord.js");
 const { getAllGuildConfigs } = require("./config");
 const { sendReply } = require("./helpers");
 
@@ -79,26 +80,59 @@ async function fetchGuildHistory(client, guild, config, user) {
   return { guildId: guild.id, guildName: guild.name, threadUrl, actions };
 }
 
-function formatGuildHistory(
+/**
+ * Builds a single embed for one guild's history section.
+ */
+function buildGuildEmbed(
+  user,
   { guildName, guildId, threadUrl, actions },
   isSource,
 ) {
-  const header = isSource
-    ? `📌 **${guildName}** (\`${guildId}\`) — *this server*`
-    : `🌐 **${guildName}** (\`${guildId}\`)`;
-  const link = threadUrl ? ` — [View Thread](${threadUrl})` : "";
+  const title = isSource ? `📌 ${guildName} — this server` : `🌐 ${guildName}`;
 
-  if (actions.length === 0) {
-    return `${header}${link}\n  ↳ No actions on record.`;
+  const embed = new EmbedBuilder()
+    .setColor(isSource ? Colors.Blurple : Colors.Grey)
+    .setTitle(title)
+    .setFooter({ text: `Guild ID: ${guildId}` });
+
+  if (threadUrl) {
+    embed.setURL(threadUrl);
   }
 
-  const lines = actions.map((a) => {
-    const ts = `<t:${Math.floor(a.timestamp.getTime() / 1000)}:d>`;
-    const serverNote = a.server ? ` *(from ${a.server})*` : "";
-    return `  • **${a.type}** — ${a.duration} — ${ts}\n    Reason: ${a.reason} | Staff: ${a.staff}${serverNote}`;
-  });
+  if (actions.length === 0) {
+    embed.setDescription("No actions on record.");
+    return embed;
+  }
 
-  return `${header}${link}\n${lines.join("\n")}`;
+  // Each action becomes a field; Discord allows up to 25 fields per embed.
+  // If there are more, truncate and note it.
+  const MAX_FIELDS = 24;
+  const shown = actions.slice(0, MAX_FIELDS);
+  const overflow = actions.length - shown.length;
+
+  for (const a of shown) {
+    const ts = `<t:${Math.floor(a.timestamp.getTime() / 1000)}:d>`;
+    const serverNote = a.server ? `\nServer: ${a.server}` : "";
+    // staff is stored as "<@id> (name)" from the original embed — renders as
+    // a highlight in embed field values without sending a ping.
+    embed.addFields({
+      name: `${a.type} · ${a.duration} · ${ts}`,
+      value: `**Reason:** ${a.reason}\n**Staff:** ${a.staff}${serverNote}`,
+      inline: false,
+    });
+  }
+
+  if (overflow > 0) {
+    embed.addFields({
+      name: `…and ${overflow} more`,
+      value: threadUrl
+        ? `[View full thread](${threadUrl})`
+        : "See the mod thread for the full history.",
+      inline: false,
+    });
+  }
+
+  return embed;
 }
 
 async function executeReports(
@@ -118,10 +152,17 @@ async function executeReports(
     ? configs
     : configs.filter((c) => c.guildId === sourceGuildId);
 
-  await sendReply(
-    replyTarget,
-    `🔍 Fetching mod history for **${user.username}** (\`${userId}\`)${full ? ` across ${targetConfigs.length} server(s)` : ""}...`,
-  );
+  // Send the header embed first
+  const headerEmbed = new EmbedBuilder()
+    .setColor(Colors.Blurple)
+    .setTitle(`📋 Mod history for ${user.username}`)
+    .setThumbnail(user.displayAvatarURL())
+    .setDescription(
+      `${full ? `Checking ${targetConfigs.length} connected server(s)` : "Checking this server only"}…`,
+    )
+    .addFields({ name: "User ID", value: user.id, inline: true });
+
+  await sendReply(replyTarget, { embeds: [headerEmbed] });
 
   const sourceConfig = targetConfigs.find((c) => c.guildId === sourceGuildId);
   const otherConfigs = targetConfigs.filter((c) => c.guildId !== sourceGuildId);
@@ -130,59 +171,55 @@ async function executeReports(
     ...otherConfigs,
   ];
 
-  const sections = [];
+  const guildEmbeds = [];
+  let totalActions = 0;
+
   for (const c of orderedConfigs) {
     const guild = client.guilds.cache.get(c.guildId);
-    if (!guild) {
-      sections.push(`⚠️ **${c.guildId}** — bot not in guild cache`);
-      continue;
-    }
+    if (!guild) continue;
     const result = await fetchGuildHistory(client, guild, c, user);
     if (!result) continue;
-    sections.push(formatGuildHistory(result, c.guildId === sourceGuildId));
-  }
-
-  if (sections.length === 0) {
-    return sendReply(
-      replyTarget,
-      `ℹ️ No mod history found for **${user.username}**.`,
+    totalActions += result.actions.length;
+    guildEmbeds.push(
+      buildGuildEmbed(user, result, c.guildId === sourceGuildId),
     );
   }
 
-  const totalActions = sections.join("").split("•").length - 1;
-  const header =
-    `📋 **Mod history for ${user.username}** (\`${userId}\`)\n` +
-    `${full ? "Showing all connected servers" : "Showing this server only"} · **${totalActions}** action(s) total\n` +
-    `${"─".repeat(40)}\n`;
-
-  const body = sections.join(`\n${"─".repeat(40)}\n`);
-  const fullMessage = header + body;
-
-  if (fullMessage.length <= 2000) {
-    return sendReply(replyTarget, fullMessage);
+  if (guildEmbeds.length === 0) {
+    return replyTarget.channel
+      ?.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(Colors.Grey)
+            .setDescription(
+              `ℹ️ No mod history found for **${user.username}**.`,
+            ),
+        ],
+      })
+      .catch(console.error);
   }
 
-  // Split into chunks under 2000 chars
-  const chunks = [];
-  let current = header;
-  for (const section of sections) {
-    const separator = `\n${"─".repeat(40)}\n`;
-    const candidate = current + (current === header ? "" : separator) + section;
-    if (candidate.length > 2000) {
-      chunks.push(current);
-      current = section;
-    } else {
-      current = candidate;
-    }
-  }
-  if (current) chunks.push(current);
+  // Update header with final count
+  const updatedHeader = EmbedBuilder.from(headerEmbed).setDescription(
+    `${full ? `Across ${targetConfigs.length} connected server(s)` : "This server only"} · **${totalActions}** action(s) total`,
+  );
 
-  for (let i = 0; i < chunks.length; i++) {
-    if (i === 0) {
-      await sendReply(replyTarget, chunks[i]);
-    } else {
-      await replyTarget.channel?.send(chunks[i]).catch(console.error);
+  // Edit the first reply to show the updated header, then send guild embeds
+  // Discord allows up to 10 embeds per message — send in batches
+  try {
+    if (replyTarget.deferred || replyTarget.replied) {
+      await replyTarget.editReply({ embeds: [updatedHeader] });
+    } else if (replyTarget.edit) {
+      await replyTarget.edit({ embeds: [updatedHeader] });
     }
+  } catch {
+    // If editing fails, it's not critical
+  }
+
+  const BATCH_SIZE = 10;
+  for (let i = 0; i < guildEmbeds.length; i += BATCH_SIZE) {
+    const batch = guildEmbeds.slice(i, i + BATCH_SIZE);
+    await replyTarget.channel?.send({ embeds: batch }).catch(console.error);
   }
 }
 
