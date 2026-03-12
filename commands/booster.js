@@ -1,8 +1,13 @@
 "use strict";
 
 // ─── BOOSTER ROLE COMMANDS ────────────────────────────────────────────────────
-// Requires:  BOOSTER_ANCHOR_ROLE_ID env var  (roles are placed just below it)
-// Data file: booster-roles.json  (auto-created next to index.js)
+// Storage:   MongoDB Atlas  (MONGODB_URI env var)
+// Env:       GUILD_<id>_BOOSTER_ANCHOR_ROLE_ID  per-guild anchor role
+//
+// No schema setup needed — MongoDB creates the collection automatically.
+// Each document looks like:
+//   { guildId, userId, roleId, type, color1, color2, createdAt }
+//   with a unique compound index on { guildId, userId }.
 //
 // Optional dep for gradient / holographic icons:
 //   npm install canvas
@@ -10,41 +15,74 @@
 // auto-generated icon (user-uploaded images always work regardless).
 
 const { EmbedBuilder, Colors } = require("discord.js");
-const fs = require("fs");
-const path = require("path");
+const { MongoClient } = require("mongodb");
+
+// ── MongoDB client (lazy singleton) ──────────────────────────────────────────
+
+let _client = null;
+let _db = null;
+
+async function getCollection() {
+  if (!_db) {
+    _client = new MongoClient(process.env.MONGODB_URI);
+    await _client.connect();
+    _db = _client.db(); // uses the DB name embedded in the URI
+    // Ensure unique index exists (safe to call repeatedly — no-op if already there)
+    await _db
+      .collection("booster_roles")
+      .createIndex({ guildId: 1, userId: 1 }, { unique: true });
+  }
+  return _db.collection("booster_roles");
+}
 
 // ── canvas is optional ────────────────────────────────────────────────────────
 let createCanvas;
 try {
   ({ createCanvas } = require("canvas"));
 } catch {
-  /* no canvas — icon gen disabled */
+  /* icon gen disabled */
 }
 
-// ─── DATA PERSISTENCE ─────────────────────────────────────────────────────────
+// ─── DATA LAYER ───────────────────────────────────────────────────────────────
 
-const DATA_PATH = path.join(__dirname, "..", "booster-roles.json");
-
-function loadData() {
+async function getEntry(guildId, userId) {
   try {
-    if (fs.existsSync(DATA_PATH))
-      return JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
-  } catch {}
-  return {};
-}
-
-function saveData(data) {
-  try {
-    fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.error("[booster] Failed to save data:", e.message);
+    const col = await getCollection();
+    return (
+      (await col.findOne({ guildId, userId }, { projection: { _id: 0 } })) ??
+      null
+    );
+  } catch (err) {
+    console.error("[booster:getEntry]", err.message);
+    return null;
   }
 }
 
-/** Returns the nested guild object, creating it if absent. */
-function guildData(data, guildId) {
-  if (!data[guildId]) data[guildId] = {};
-  return data[guildId];
+async function upsertEntry(guildId, userId, fields) {
+  try {
+    const col = await getCollection();
+    await col.updateOne(
+      { guildId, userId },
+      {
+        $set: { guildId, userId, ...fields },
+        $setOnInsert: { createdAt: new Date() },
+      },
+      { upsert: true },
+    );
+  } catch (err) {
+    console.error("[booster:upsertEntry]", err.message);
+    throw new Error("Failed to save booster role data.");
+  }
+}
+
+async function deleteEntry(guildId, userId) {
+  try {
+    const col = await getCollection();
+    await col.deleteOne({ guildId, userId });
+  } catch (err) {
+    console.error("[booster:deleteEntry]", err.message);
+    throw new Error("Failed to remove booster role data.");
+  }
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -55,10 +93,6 @@ function isBooster(member) {
   return member.premiumSinceTimestamp !== null || member.user.id === OWNER_ID;
 }
 
-/**
- * Parses a hex string like "FF0000" or "#FF0000".
- * Returns the integer value, or null if invalid.
- */
 function parseHex(hex) {
   if (!hex) return null;
   const clean = hex.replace(/^#/, "");
@@ -70,16 +104,11 @@ function normaliseHex(hex) {
   return hex ? `#${hex.replace(/^#/, "").toUpperCase()}` : null;
 }
 
-/** Returns the integer color best representing a role config. */
 function dominantColor(type, color1, color2) {
-  if (type === "holographic") return 0xb44fe8; // purple-ish default
-  return parseHex(color1) ?? 0x99aab5; // Discord "default grey"
+  if (type === "holographic") return 0xb44fe8;
+  return parseHex(color1) ?? 0x99aab5;
 }
 
-/**
- * Finds the position just below the guild's configured anchor role.
- * Returns 0 (bottom of list) if no anchor is configured or role isn't found.
- */
 async function anchorPosition(guild, anchorRoleId) {
   if (!anchorRoleId) return 0;
   try {
@@ -94,7 +123,6 @@ async function anchorPosition(guild, anchorRoleId) {
 
 // ─── ICON GENERATION (canvas) ────────────────────────────────────────────────
 
-/** Draws a circular 64×64 gradient PNG buffer. Returns null if canvas missing. */
 function makeGradientIcon(hex1, hex2) {
   if (!createCanvas) return null;
   try {
@@ -114,7 +142,6 @@ function makeGradientIcon(hex1, hex2) {
   }
 }
 
-/** Draws a rainbow holographic circular 64×64 PNG buffer. */
 function makeHolographicIcon() {
   if (!createCanvas) return null;
   try {
@@ -122,9 +149,8 @@ function makeHolographicIcon() {
     const canvas = createCanvas(SIZE, SIZE);
     const ctx = canvas.getContext("2d");
 
-    // Rainbow base
     const rainbow = ctx.createLinearGradient(0, 0, SIZE, SIZE);
-    const stops = [
+    [
       [0.0, "#ff0080"],
       [0.17, "#ff8c00"],
       [0.33, "#ffe000"],
@@ -132,14 +158,12 @@ function makeHolographicIcon() {
       [0.67, "#00b0ff"],
       [0.83, "#7c4dff"],
       [1.0, "#ff0080"],
-    ];
-    stops.forEach(([pos, c]) => rainbow.addColorStop(pos, c));
+    ].forEach(([pos, c]) => rainbow.addColorStop(pos, c));
     ctx.fillStyle = rainbow;
     ctx.beginPath();
     ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2, 0, Math.PI * 2);
     ctx.fill();
 
-    // Shimmer overlay
     const shimmer = ctx.createRadialGradient(
       22,
       20,
@@ -164,31 +188,20 @@ function makeHolographicIcon() {
 
 // ─── COMMAND IMPLEMENTATIONS ──────────────────────────────────────────────────
 
-/**
- * &createBoosterRole / /createboosterrole
- *
- * @param {Guild}      guild
- * @param {GuildMember} member
- * @param {object}     opts  – { roleName, type, color1, color2, imageAttachment, anchorRoleId }
- * @param {Function}   reply – async (content) => void
- */
 async function executeCreateBoosterRole(guild, member, opts, reply) {
   if (!isBooster(member)) {
     return reply(
-      "❌ You need to be a **server booster** to create a custom role.",
+      "\u274c You need to be a **server booster** to create a custom role.",
     );
   }
 
-  const data = loadData();
-  const gd = guildData(data, guild.id);
-
-  if (gd[member.id]) {
+  const existing = await getEntry(guild.id, member.id);
+  if (existing) {
     return reply(
-      "❌ You already have a booster role. Use `editBoosterColor`, `boosterRoleImage`, or `deleteBoosterRole` to manage it.",
+      "\u274c You already have a booster role. Use `editBoosterColor`, `boosterRoleImage`, or `deleteBoosterRole` to manage it.",
     );
   }
 
-  // ── Validate colours ──
   const {
     roleName,
     type = "solid",
@@ -198,27 +211,23 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
     anchorRoleId,
   } = opts;
 
-  if (color1 && parseHex(color1) === null) {
+  if (color1 && parseHex(color1) === null)
     return reply(
-      "❌ Invalid colour for **color1**. Use hex format like `FF0000` or `#FF0000`.",
+      "\u274c Invalid colour for **color1**. Use hex format like `FF0000` or `#FF0000`.",
     );
-  }
-  if (color2 && parseHex(color2) === null) {
+  if (color2 && parseHex(color2) === null)
     return reply(
-      "❌ Invalid colour for **color2**. Use hex format like `FF0000` or `#FF0000`.",
+      "\u274c Invalid colour for **color2**. Use hex format like `FF0000` or `#FF0000`.",
     );
-  }
-  if (type === "gradient" && color1 && !color2) {
+  if (type === "gradient" && color1 && !color2)
     return reply(
-      "❌ Gradient type requires **two** colours. Please provide `color2` as well.",
+      "\u274c Gradient type requires **two** colours. Please provide `color2` as well.",
     );
-  }
 
   const roleColor = dominantColor(type, color1, color2);
   const hasIcons = guild.features.includes("ROLE_ICONS");
   const pos = await anchorPosition(guild, anchorRoleId);
 
-  // ── Create the role ──
   let role;
   try {
     role = await guild.roles.create({
@@ -232,11 +241,10 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
   } catch (err) {
     console.error("[createBoosterRole] create error:", err.message);
     return reply(
-      "❌ Failed to create the role. Make sure the bot has the **Manage Roles** permission and is ranked above the anchor role.",
+      "\u274c Failed to create the role. Make sure the bot has the **Manage Roles** permission and is ranked above the anchor role.",
     );
   }
 
-  // ── Set icon ──
   let iconNote = "";
   if (hasIcons) {
     try {
@@ -247,48 +255,49 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
         );
       } else if (type === "gradient" && color1 && color2) {
         const buf = makeGradientIcon(color1, color2);
-        if (buf) await role.setIcon(buf, `Booster gradient icon`);
-        else if (!createCanvas)
-          iconNote = "\n⚠️ Install `canvas` to auto-generate gradient icons.";
-      } else if (type === "holographic") {
-        const buf = makeHolographicIcon();
-        if (buf) await role.setIcon(buf, `Booster holographic icon`);
+        if (buf) await role.setIcon(buf, "Booster gradient icon");
         else if (!createCanvas)
           iconNote =
-            "\n⚠️ Install `canvas` to auto-generate holographic icons.";
+            "\n\u26a0\ufe0f Install `canvas` to auto-generate gradient icons.";
+      } else if (type === "holographic") {
+        const buf = makeHolographicIcon();
+        if (buf) await role.setIcon(buf, "Booster holographic icon");
+        else if (!createCanvas)
+          iconNote =
+            "\n\u26a0\ufe0f Install `canvas` to auto-generate holographic icons.";
       }
     } catch (err) {
       console.warn("[createBoosterRole] icon error:", err.message);
       iconNote =
-        "\n⚠️ Couldn't set the role icon (the image may be too large or an unsupported format).";
+        "\n\u26a0\ufe0f Couldn't set the role icon (the image may be too large or an unsupported format).";
     }
-  } else {
-    if (imageAttachment || type !== "solid") {
-      iconNote =
-        "\n⚠️ This server doesn't have the **Role Icons** feature (requires Level 2 boost).";
-    }
+  } else if (imageAttachment || type !== "solid") {
+    iconNote =
+      "\n\u26a0\ufe0f This server doesn't have the **Role Icons** feature (requires Level 2 boost).";
   }
 
-  // ── Assign role ──
   try {
     await member.roles.add(role, "Booster custom role assigned");
   } catch (err) {
     console.warn("[createBoosterRole] assign error:", err.message);
   }
 
-  // ── Persist ──
-  gd[member.id] = {
-    roleId: role.id,
-    type,
-    color1: color1 ? normaliseHex(color1) : null,
-    color2: color2 ? normaliseHex(color2) : null,
-    createdAt: new Date().toISOString(),
-  };
-  saveData(data);
+  try {
+    await upsertEntry(guild.id, member.id, {
+      roleId: role.id,
+      type,
+      color1: color1 ? normaliseHex(color1) : null,
+      color2: color2 ? normaliseHex(color2) : null,
+    });
+  } catch (err) {
+    console.error("[createBoosterRole] persist error:", err.message);
+    iconNote +=
+      "\n\u26a0\ufe0f Role created, but failed to save to database. Please contact an admin.";
+  }
 
   const embed = new EmbedBuilder()
     .setColor(roleColor)
-    .setTitle("✨ Booster Role Created")
+    .setTitle("\u2728 Booster Role Created")
     .setDescription(
       `Your custom role **${role.name}** has been created and assigned to you!${iconNote}`,
     )
@@ -304,7 +313,7 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
         : []),
     )
     .setFooter({
-      text: "Use &editBoosterColor • &boosterRoleImage • &deleteBoosterRole",
+      text: "Use &editBoosterColor \u2022 &boosterRoleImage \u2022 &deleteBoosterRole",
     })
     .setTimestamp();
 
@@ -313,54 +322,42 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * &editBoosterColor / /editboostercolor
- * Updates the role colour (and icon for gradient/holographic).
- */
 async function executeEditBoosterColor(guild, member, opts, reply) {
   if (!isBooster(member)) {
-    return reply("❌ You need to be a **server booster** to use this command.");
-  }
-
-  const data = loadData();
-  const gd = guildData(data, guild.id);
-  const entry = gd[member.id];
-
-  if (!entry) {
     return reply(
-      "❌ You don't have a booster role yet. Use `createBoosterRole` to create one.",
+      "\u274c You need to be a **server booster** to use this command.",
     );
   }
+
+  const entry = await getEntry(guild.id, member.id);
+  if (!entry)
+    return reply(
+      "\u274c You don't have a booster role yet. Use `createBoosterRole` to create one.",
+    );
 
   const { type = "solid", color1, color2 } = opts;
 
-  if (!color1) {
-    return reply("❌ Please provide at least **color1**.");
-  }
-  if (parseHex(color1) === null) {
+  if (!color1) return reply("\u274c Please provide at least **color1**.");
+  if (parseHex(color1) === null)
     return reply(
-      "❌ Invalid colour for **color1**. Use hex format like `FF0000` or `#FF0000`.",
+      "\u274c Invalid colour for **color1**. Use hex format like `FF0000` or `#FF0000`.",
     );
-  }
-  if (color2 && parseHex(color2) === null) {
+  if (color2 && parseHex(color2) === null)
     return reply(
-      "❌ Invalid colour for **color2**. Use hex format like `FF0000` or `#FF0000`.",
+      "\u274c Invalid colour for **color2**. Use hex format like `FF0000` or `#FF0000`.",
     );
-  }
-  if (type === "gradient" && !color2) {
+  if (type === "gradient" && !color2)
     return reply(
-      "❌ Gradient type requires **two** colours. Please provide `color2` as well.",
+      "\u274c Gradient type requires **two** colours. Please provide `color2` as well.",
     );
-  }
 
   const role =
     guild.roles.cache.get(entry.roleId) ??
     (await guild.roles.fetch(entry.roleId).catch(() => null));
-  if (!role) {
+  if (!role)
     return reply(
-      "❌ Your booster role no longer exists. Use `deleteBoosterRole` to clean up, then `createBoosterRole` to start fresh.",
+      "\u274c Your booster role no longer exists. Use `deleteBoosterRole` to clean up, then `createBoosterRole` to start fresh.",
     );
-  }
 
   const newColor = dominantColor(type, color1, color2);
   const hasIcons = guild.features.includes("ROLE_ICONS");
@@ -370,7 +367,7 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
     await role.setColor(newColor, "Booster colour edit");
   } catch (err) {
     console.error("[editBoosterColor] setColor error:", err.message);
-    return reply("❌ Failed to update the role colour.");
+    return reply("\u274c Failed to update the role colour.");
   }
 
   if (hasIcons) {
@@ -379,15 +376,15 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
         const buf = makeGradientIcon(color1, color2);
         if (buf) await role.setIcon(buf, "Booster gradient icon update");
         else if (!createCanvas)
-          iconNote = "\n⚠️ Install `canvas` to auto-generate gradient icons.";
+          iconNote =
+            "\n\u26a0\ufe0f Install `canvas` to auto-generate gradient icons.";
       } else if (type === "holographic") {
         const buf = makeHolographicIcon();
         if (buf) await role.setIcon(buf, "Booster holographic icon update");
         else if (!createCanvas)
           iconNote =
-            "\n⚠️ Install `canvas` to auto-generate holographic icons.";
+            "\n\u26a0\ufe0f Install `canvas` to auto-generate holographic icons.";
       } else {
-        // solid — clear any existing icon
         await role
           .setIcon(null, "Booster solid colour — icon cleared")
           .catch(() => {});
@@ -397,15 +394,22 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
     }
   }
 
-  // ── Persist ──
-  entry.type = type;
-  entry.color1 = normaliseHex(color1);
-  entry.color2 = color2 ? normaliseHex(color2) : null;
-  saveData(data);
+  try {
+    await upsertEntry(guild.id, member.id, {
+      roleId: entry.roleId,
+      type,
+      color1: normaliseHex(color1),
+      color2: color2 ? normaliseHex(color2) : null,
+    });
+  } catch (err) {
+    console.error("[editBoosterColor] persist error:", err.message);
+    iconNote +=
+      "\n\u26a0\ufe0f Colour updated, but failed to save to database.";
+  }
 
   const embed = new EmbedBuilder()
     .setColor(newColor)
-    .setTitle("🎨 Booster Role Updated")
+    .setTitle("\ud83c\udfa8 Booster Role Updated")
     .setDescription(`**${role.name}** has been updated.${iconNote}`)
     .addFields(
       { name: "Type", value: type, inline: true },
@@ -421,41 +425,31 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * &boosterRoleImage / /boosterroleimage
- * Sets the role icon from an attached image.
- */
 async function executeBoosterRoleImage(guild, member, imageAttachment, reply) {
-  if (!isBooster(member)) {
-    return reply("❌ You need to be a **server booster** to use this command.");
-  }
-
-  const data = loadData();
-  const gd = guildData(data, guild.id);
-  const entry = gd[member.id];
-
-  if (!entry) {
+  if (!isBooster(member))
     return reply(
-      "❌ You don't have a booster role yet. Use `createBoosterRole` to create one.",
+      "\u274c You need to be a **server booster** to use this command.",
     );
-  }
-  if (!imageAttachment) {
-    return reply("❌ Please attach an image to set as your role icon.");
-  }
-  if (!guild.features.includes("ROLE_ICONS")) {
+
+  const entry = await getEntry(guild.id, member.id);
+  if (!entry)
     return reply(
-      "❌ This server doesn't have the **Role Icons** feature (requires Level 2 boost).",
+      "\u274c You don't have a booster role yet. Use `createBoosterRole` to create one.",
     );
-  }
+  if (!imageAttachment)
+    return reply("\u274c Please attach an image to set as your role icon.");
+  if (!guild.features.includes("ROLE_ICONS"))
+    return reply(
+      "\u274c This server doesn't have the **Role Icons** feature (requires Level 2 boost).",
+    );
 
   const role =
     guild.roles.cache.get(entry.roleId) ??
     (await guild.roles.fetch(entry.roleId).catch(() => null));
-  if (!role) {
+  if (!role)
     return reply(
-      "❌ Your booster role no longer exists. Use `deleteBoosterRole` to clean up, then `createBoosterRole` to start fresh.",
+      "\u274c Your booster role no longer exists. Use `deleteBoosterRole` to clean up, then `createBoosterRole` to start fresh.",
     );
-  }
 
   try {
     await role.setIcon(
@@ -465,38 +459,32 @@ async function executeBoosterRoleImage(guild, member, imageAttachment, reply) {
   } catch (err) {
     console.error("[boosterRoleImage] error:", err.message);
     return reply(
-      "❌ Failed to set the role icon. The image may be too large or an unsupported format (use PNG/JPG under 256 KB).",
+      "\u274c Failed to set the role icon. The image may be too large or an unsupported format (use PNG/JPG under 256 KB).",
     );
   }
 
-  const embed = new EmbedBuilder()
-    .setColor(role.color || 0x99aab5)
-    .setTitle("🖼️ Role Icon Updated")
-    .setDescription(`The icon for **${role.name}** has been updated.`)
-    .setThumbnail(imageAttachment.url)
-    .setTimestamp();
-
-  return reply({ embeds: [embed] });
+  return reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(role.color || 0x99aab5)
+        .setTitle("\ud83d\uddbc\ufe0f Role Icon Updated")
+        .setDescription(`The icon for **${role.name}** has been updated.`)
+        .setThumbnail(imageAttachment.url)
+        .setTimestamp(),
+    ],
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * &deleteBoosterRole / /deleteboosterrole
- * Deletes the role from the guild and removes it from the JSON.
- */
 async function executeDeleteBoosterRole(guild, member, reply) {
-  if (!isBooster(member)) {
-    return reply("❌ You need to be a **server booster** to use this command.");
-  }
+  if (!isBooster(member))
+    return reply(
+      "\u274c You need to be a **server booster** to use this command.",
+    );
 
-  const data = loadData();
-  const gd = guildData(data, guild.id);
-  const entry = gd[member.id];
-
-  if (!entry) {
-    return reply("❌ You don't have a booster role to delete.");
-  }
+  const entry = await getEntry(guild.id, member.id);
+  if (!entry) return reply("\u274c You don't have a booster role to delete.");
 
   let roleName = "your booster role";
   try {
@@ -510,22 +498,30 @@ async function executeDeleteBoosterRole(guild, member, reply) {
   } catch (err) {
     console.error("[deleteBoosterRole] delete error:", err.message);
     return reply(
-      "❌ Failed to delete the role. Make sure the bot has the **Manage Roles** permission.",
+      "\u274c Failed to delete the role. Make sure the bot has the **Manage Roles** permission.",
     );
   }
 
-  delete gd[member.id];
-  saveData(data);
+  try {
+    await deleteEntry(guild.id, member.id);
+  } catch (err) {
+    console.error("[deleteBoosterRole] persist error:", err.message);
+    return reply(
+      "\u26a0\ufe0f Role deleted, but failed to remove from database. Please contact an admin.",
+    );
+  }
 
-  const embed = new EmbedBuilder()
-    .setColor(Colors.Red)
-    .setTitle("🗑️ Booster Role Deleted")
-    .setDescription(
-      `**${roleName}** has been deleted. You can create a new one with \`createBoosterRole\`.`,
-    )
-    .setTimestamp();
-
-  return reply({ embeds: [embed] });
+  return reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(Colors.Red)
+        .setTitle("\ud83d\uddd1\ufe0f Booster Role Deleted")
+        .setDescription(
+          `**${roleName}** has been deleted. You can create a new one with \`createBoosterRole\`.`,
+        )
+        .setTimestamp(),
+    ],
+  });
 }
 
 // ─── EXPORTS ──────────────────────────────────────────────────────────────────
