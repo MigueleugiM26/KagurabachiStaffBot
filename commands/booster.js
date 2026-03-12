@@ -339,13 +339,19 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
       "\u274c You don't have a booster role yet. Use `createBoosterRole` to create one.",
     );
 
-  const { type = "solid", color1, color2 } = opts;
+  const { type = "solid", color2 } = opts;
+  let { color1 } = opts;
 
-  if (!color1) return reply("\u274c Please provide at least **color1**.");
-  if (parseHex(color1) === null)
-    return reply(
-      "\u274c Invalid colour for **color1**. Use hex format like `FF0000` or `#FF0000`.",
-    );
+  // Holographic uses no colours — ignore whatever was passed
+  if (type === "holographic") color1 = null;
+
+  if (type !== "holographic") {
+    if (!color1) return reply("\u274c Please provide at least **color1**.");
+    if (parseHex(color1) === null)
+      return reply(
+        "\u274c Invalid colour for **color1**. Use hex format like `FF0000` or `#FF0000`.",
+      );
+  }
   if (color2 && parseHex(color2) === null)
     return reply(
       "\u274c Invalid colour for **color2**. Use hex format like `FF0000` or `#FF0000`.",
@@ -385,9 +391,7 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
       } else if (type === "holographic") {
         const buf = makeHolographicIcon();
         if (buf) await role.setIcon(buf, "Booster holographic icon update");
-        else if (!createCanvas)
-          iconNote =
-            "\n\u26a0\ufe0f Install `canvas` to auto-generate holographic icons.";
+        // canvas not installed — holographic icon skipped, role color still updated
       } else {
         await role
           .setIcon(null, "Booster solid colour — icon cleared")
@@ -402,8 +406,9 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
     await upsertEntry(guild.id, member.id, {
       roleId: entry.roleId,
       type,
-      color1: normaliseHex(color1),
-      color2: color2 ? normaliseHex(color2) : null,
+      color1: type === "holographic" ? null : normaliseHex(color1),
+      color2:
+        type === "holographic" ? null : color2 ? normaliseHex(color2) : null,
     });
   } catch (err) {
     console.error("[editBoosterColor] persist error:", err.message);
@@ -417,7 +422,9 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
     .setDescription(`**${role.name}** has been updated.${iconNote}`)
     .addFields(
       { name: "Type", value: type, inline: true },
-      { name: "Color 1", value: normaliseHex(color1), inline: true },
+      ...(type !== "holographic" && color1
+        ? [{ name: "Color 1", value: normaliseHex(color1), inline: true }]
+        : []),
       ...(color2
         ? [{ name: "Color 2", value: normaliseHex(color2), inline: true }]
         : []),

@@ -257,8 +257,8 @@ const crossCommands = [
     .addStringOption((o) =>
       o
         .setName("color1")
-        .setDescription("Primary hex colour, e.g. FF0000 or #FF0000")
-        .setRequired(true),
+        .setDescription("Primary hex colour — not needed for holographic")
+        .setRequired(false),
     )
     .addStringOption((o) =>
       o
