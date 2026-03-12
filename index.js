@@ -170,6 +170,16 @@ const crossCommands = [
         .setDescription("Command name to look up (optional)")
         .setRequired(false),
     ),
+
+  new SlashCommandBuilder()
+    .setName("contact")
+    .setDescription(
+      "Get the bot owner's contact for questions or issues about the bot",
+    ),
+
+  new SlashCommandBuilder()
+    .setName("serverlist")
+    .setDescription("Show all servers this bot is currently in"),
 ].map((c) => c.toJSON());
 
 // ─── MANGA SCHEDULER ──────────────────────────────────────────────────────────
@@ -444,8 +454,38 @@ client.on("interactionCreate", async (interaction) => {
     "mangacheck",
     "reports",
     "help",
+    "contact",
+    "serverlist",
   ];
   if (!validCommands.includes(commandName)) return;
+
+  // contact — open to everyone, no tier check needed
+  if (commandName === "contact") {
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Blurple)
+      .setTitle("📬  Contact the Bot Owner")
+      .setDescription(
+        "For questions, issues, or setup requests about this bot, reach out on Discord:\n\n" +
+          "<@450842915024142374>",
+      )
+      .setFooter({
+        text: "You can send a friend request or DM directly if you share a server.",
+      });
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  // serverlist — open to everyone, no tier check needed
+  if (commandName === "serverlist") {
+    const guilds = [...client.guilds.cache.values()].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    const list = guilds.map((g) => `• **${g.name}** (\`${g.id}\`)`).join("\n");
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Blurple)
+      .setTitle(`🌐  Servers (${guilds.length})`)
+      .setDescription(list || "No servers found.");
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
 
   const config = getGuildConfig(guild.id);
   if (
