@@ -109,12 +109,13 @@ const COMMAND_TIERS = {
   crosscheck: 1,
   crosskick: 1,
   reports: 1,
-  help: 0, // available to everyone — handled specially in hasTierAccess
+  help: 0,
   mangacheck: 2,
   crossmute: 2,
   crossunmute: 2,
   crossban: 3,
   crossunban: 3,
+  archive: 1,
 };
 
 /**
@@ -221,6 +222,15 @@ const COMMAND_CATALOG = [
     usage: "/serverlist",
     description: "Show all servers this bot is currently in.",
     args: [],
+  },
+  {
+    name: "archive",
+    tier: 1,
+    usage: "&archive <emoji or sticker ID>",
+    description: "Download a custom emoji or sticker and post it as an image.",
+    args: [
+      "`input` — Paste a custom emoji (e.g. `<:name:id>`) or a bare sticker ID.",
+    ],
   },
 ];
 
