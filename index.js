@@ -246,6 +246,8 @@ client.on("messageCreate", async (message) => {
       "crosscheck",
       "reports",
       "help",
+      "contact",
+      "serverlist",
     ];
 
     if (validCrossCommands.includes(command)) {
@@ -259,6 +261,36 @@ client.on("messageCreate", async (message) => {
       if (command === "help") {
         const target = args[1]?.toLowerCase() ?? null;
         return message.reply(buildHelpPayload(target, config, message.guild));
+      }
+
+      // contact — no userId needed
+      if (command === "contact") {
+        const embed = new EmbedBuilder()
+          .setColor(Colors.Blurple)
+          .setTitle("📬  Contact the Bot Owner")
+          .setDescription(
+            "For questions, issues, or setup requests about this bot, reach out on Discord:\n\n" +
+              "<@450842915024142374>",
+          )
+          .setFooter({
+            text: "You can send a friend request or DM directly if you share a server.",
+          });
+        return message.reply({ embeds: [embed] });
+      }
+
+      // serverlist — no userId needed
+      if (command === "serverlist") {
+        const guilds = [...client.guilds.cache.values()].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+        const list = guilds
+          .map((g) => `• **${g.name}** (\`${g.id}\`)`)
+          .join("\n");
+        const embed = new EmbedBuilder()
+          .setColor(Colors.Blurple)
+          .setTitle(`🌐  Servers (${guilds.length})`)
+          .setDescription(list || "No servers found.");
+        return message.reply({ embeds: [embed] });
       }
 
       const userId = (args[1] ?? "").replace(/[<@!>]/g, "");
