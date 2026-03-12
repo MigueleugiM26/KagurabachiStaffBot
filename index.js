@@ -365,12 +365,66 @@ client.on("messageCreate", async (message) => {
       "contact",
       "serverlist",
       "archive",
-      // booster commands
-      "createboosterrole",
-      "editboostercolor",
-      "boosterroleimage",
-      "deleteboosterrole",
     ];
+
+    // ── Booster commands — no userId, uses the message author ──────────────
+    if (
+      [
+        "createboosterrole",
+        "editboostercolor",
+        "boosterroleimage",
+        "deleteboosterrole",
+      ].includes(command)
+    ) {
+      const replyFn = (c) => message.reply(c);
+      if (command === "createboosterrole") {
+        const [roleName, type, color1, color2] = args.slice(1);
+        if (!roleName)
+          return message.reply(
+            "❌ Usage: `&createBoosterRole <n> [type] [color1] [color2]`",
+          );
+        const imageAttachment = message.attachments.first() ?? null;
+        const guildCfg = getGuildConfig(message.guild.id);
+        return executeCreateBoosterRole(
+          message.guild,
+          message.member,
+          {
+            roleName,
+            type: type?.toLowerCase(),
+            color1,
+            color2,
+            imageAttachment,
+            anchorRoleId: guildCfg?.boosterAnchorRoleId ?? null,
+          },
+          replyFn,
+        );
+      }
+      if (command === "editboostercolor") {
+        const [type, color1, color2] = args.slice(1);
+        if (!type || !color1)
+          return message.reply(
+            "❌ Usage: `&editBoosterColor <type> <color1> [color2]`",
+          );
+        return executeEditBoosterColor(
+          message.guild,
+          message.member,
+          { type: type.toLowerCase(), color1, color2 },
+          replyFn,
+        );
+      }
+      if (command === "boosterroleimage") {
+        const imageAttachment = message.attachments.first() ?? null;
+        return executeBoosterRoleImage(
+          message.guild,
+          message.member,
+          imageAttachment,
+          replyFn,
+        );
+      }
+      if (command === "deleteboosterrole") {
+        return executeDeleteBoosterRole(message.guild, message.member, replyFn);
+      }
+    }
 
     if (validCrossCommands.includes(command)) {
       if (!hasTierAccess(message.member, config, command)) {
@@ -526,66 +580,6 @@ client.on("messageCreate", async (message) => {
         });
       }
       return;
-    }
-
-    // ── Booster commands (parsed separately — no userId arg) ──────────────────
-    if (content.startsWith(CROSS_PREFIX)) {
-      const rawArgs = content.slice(CROSS_PREFIX.length).trim().split(/\s+/);
-      const cmd = rawArgs[0]?.toLowerCase();
-      const replyFn = (c) => message.reply(c);
-
-      if (cmd === "createboosterrole") {
-        // &createBoosterRole <name> [type] [color1] [color2]
-        const [roleName, type, color1, color2] = rawArgs.slice(1);
-        if (!roleName)
-          return message.reply(
-            "❌ Usage: `&createBoosterRole <name> [type] [color1] [color2]`",
-          );
-        const imageAttachment = message.attachments.first() ?? null;
-        const guildCfg = getGuildConfig(message.guild.id);
-        return executeCreateBoosterRole(
-          message.guild,
-          message.member,
-          {
-            roleName,
-            type: type?.toLowerCase(),
-            color1,
-            color2,
-            imageAttachment,
-            anchorRoleId: guildCfg?.boosterAnchorRoleId ?? null,
-          },
-          replyFn,
-        );
-      }
-
-      if (cmd === "editboostercolor") {
-        // &editBoosterColor <type> <color1> [color2]
-        const [type, color1, color2] = rawArgs.slice(1);
-        if (!type || !color1)
-          return message.reply(
-            "❌ Usage: `&editBoosterColor <type> <color1> [color2]`",
-          );
-        return executeEditBoosterColor(
-          message.guild,
-          message.member,
-          { type: type.toLowerCase(), color1, color2 },
-          replyFn,
-        );
-      }
-
-      if (cmd === "boosterroleimage") {
-        const imageAttachment = message.attachments.first() ?? null;
-        return executeBoosterRoleImage(
-          message.guild,
-          message.member,
-          imageAttachment,
-          replyFn,
-        );
-      }
-
-      if (cmd === "deleteboosterrole") {
-        return executeDeleteBoosterRole(message.guild, message.member, replyFn);
-      }
     }
   }
 
