@@ -25,9 +25,9 @@ let _db = null;
 async function getCollection() {
   if (!_db) {
     _client = new MongoClient(process.env.MONGODB_URI, {
-      tls: true,
       serverSelectionTimeoutMS: 10000,
       socketTimeoutMS: 45000,
+      connectTimeoutMS: 10000,
     });
     await _client.connect();
     _db = _client.db(); // uses the DB name embedded in the URI
