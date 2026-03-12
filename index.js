@@ -4,6 +4,7 @@ const {
   Client,
   GatewayIntentBits,
   AuditLogEvent,
+  EmbedBuilder,
   Colors,
   REST,
   Routes,
