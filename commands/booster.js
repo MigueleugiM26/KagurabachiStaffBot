@@ -380,6 +380,7 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
 
   try {
     await role.edit({
+      color: newColor,
       colors: buildColors(type, color1, color2),
       reason: "Booster colour edit",
     });
