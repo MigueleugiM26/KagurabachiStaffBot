@@ -40,6 +40,12 @@ const {
   handleAppealButton,
   handleAppealSubmission,
 } = require("./commands/appeals");
+const {
+  executeCreateBoosterRole,
+  executeEditBoosterColor,
+  executeBoosterRoleImage,
+  executeDeleteBoosterRole,
+} = require("./commands/booster");
 
 // ─── CLIENT ───────────────────────────────────────────────────────────────────
 
@@ -195,6 +201,86 @@ const crossCommands = [
         )
         .setRequired(true),
     ),
+
+  // ── Booster commands ───────────────────────────────────────────────────────
+  new SlashCommandBuilder()
+    .setName("createboosterrole")
+    .setDescription("🚀 Boosters only — Create your own custom server role")
+    .addStringOption((o) =>
+      o.setName("name").setDescription("Role name").setRequired(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("type")
+        .setDescription("Colour type (default: solid)")
+        .setRequired(false)
+        .addChoices(
+          { name: "solid", value: "solid" },
+          { name: "gradient", value: "gradient" },
+          { name: "holographic", value: "holographic" },
+        ),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("color1")
+        .setDescription("Primary hex colour, e.g. FF0000 or #FF0000")
+        .setRequired(false),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("color2")
+        .setDescription("Secondary hex colour (gradient only)")
+        .setRequired(false),
+    )
+    .addAttachmentOption((o) =>
+      o
+        .setName("icon")
+        .setDescription("Image to use as role icon (server Level 2+ required)")
+        .setRequired(false),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("editboostercolor")
+    .setDescription("🚀 Boosters only — Edit your booster role's colour/type")
+    .addStringOption((o) =>
+      o
+        .setName("type")
+        .setDescription("Colour type")
+        .setRequired(true)
+        .addChoices(
+          { name: "solid", value: "solid" },
+          { name: "gradient", value: "gradient" },
+          { name: "holographic", value: "holographic" },
+        ),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("color1")
+        .setDescription("Primary hex colour, e.g. FF0000 or #FF0000")
+        .setRequired(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("color2")
+        .setDescription("Secondary hex colour (required for gradient)")
+        .setRequired(false),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("boosterroleimage")
+    .setDescription(
+      "🚀 Boosters only — Set your booster role's icon from an image",
+    )
+    .addAttachmentOption((o) =>
+      o
+        .setName("icon")
+        .setDescription("Image to set as your role icon")
+        .setRequired(true),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("deleteboosterrole")
+    .setDescription("🚀 Boosters only — Delete your custom booster role"),
 ].map((c) => c.toJSON());
 
 // ─── MANGA SCHEDULER ──────────────────────────────────────────────────────────
@@ -279,6 +365,11 @@ client.on("messageCreate", async (message) => {
       "contact",
       "serverlist",
       "archive",
+      // booster commands
+      "createboosterrole",
+      "editboostercolor",
+      "boosterroleimage",
+      "deleteboosterrole",
     ];
 
     if (validCrossCommands.includes(command)) {
@@ -436,6 +527,66 @@ client.on("messageCreate", async (message) => {
       }
       return;
     }
+
+    // ── Booster commands (parsed separately — no userId arg) ──────────────────
+    if (content.startsWith(CROSS_PREFIX)) {
+      const rawArgs = content.slice(CROSS_PREFIX.length).trim().split(/\s+/);
+      const cmd = rawArgs[0]?.toLowerCase();
+      const replyFn = (c) => message.reply(c);
+
+      if (cmd === "createboosterrole") {
+        // &createBoosterRole <name> [type] [color1] [color2]
+        const [roleName, type, color1, color2] = rawArgs.slice(1);
+        if (!roleName)
+          return message.reply(
+            "❌ Usage: `&createBoosterRole <name> [type] [color1] [color2]`",
+          );
+        const imageAttachment = message.attachments.first() ?? null;
+        const guildCfg = getGuildConfig(message.guild.id);
+        return executeCreateBoosterRole(
+          message.guild,
+          message.member,
+          {
+            roleName,
+            type: type?.toLowerCase(),
+            color1,
+            color2,
+            imageAttachment,
+            anchorRoleId: guildCfg?.boosterAnchorRoleId ?? null,
+          },
+          replyFn,
+        );
+      }
+
+      if (cmd === "editboostercolor") {
+        // &editBoosterColor <type> <color1> [color2]
+        const [type, color1, color2] = rawArgs.slice(1);
+        if (!type || !color1)
+          return message.reply(
+            "❌ Usage: `&editBoosterColor <type> <color1> [color2]`",
+          );
+        return executeEditBoosterColor(
+          message.guild,
+          message.member,
+          { type: type.toLowerCase(), color1, color2 },
+          replyFn,
+        );
+      }
+
+      if (cmd === "boosterroleimage") {
+        const imageAttachment = message.attachments.first() ?? null;
+        return executeBoosterRoleImage(
+          message.guild,
+          message.member,
+          imageAttachment,
+          replyFn,
+        );
+      }
+
+      if (cmd === "deleteboosterrole") {
+        return executeDeleteBoosterRole(message.guild, message.member, replyFn);
+      }
+    }
   }
 
   // ── Regular mod commands (audit log enrichment + warn) ──
@@ -582,6 +733,11 @@ client.on("interactionCreate", async (interaction) => {
       "contact",
       "serverlist",
       "archive",
+      // booster commands
+      "createboosterrole",
+      "editboostercolor",
+      "boosterroleimage",
+      "deleteboosterrole",
     ];
     if (!validCommands.includes(commandName)) return;
 
@@ -753,6 +909,65 @@ client.on("interactionCreate", async (interaction) => {
         full,
         replyTarget: interaction,
       });
+    }
+
+    // ── Booster commands ─────────────────────────────────────────────────────
+    // These are handled outside the tier-gated block because they have no
+    // userId argument and are open to everyone (booster check is inside).
+    const replyFn = async (c) => {
+      if (interaction.deferred || interaction.replied)
+        return interaction.editReply(c);
+      return interaction.reply({
+        ...(typeof c === "string" ? { content: c } : c),
+        ephemeral: true,
+      });
+    };
+
+    if (commandName === "createboosterrole") {
+      await interaction.deferReply({ ephemeral: true });
+      const roleName = interaction.options.getString("name");
+      const type = interaction.options.getString("type") ?? "solid";
+      const color1 = interaction.options.getString("color1") ?? null;
+      const color2 = interaction.options.getString("color2") ?? null;
+      const imageAttachment = interaction.options.getAttachment("icon") ?? null;
+      const boosterGuildCfg = getGuildConfig(guild.id);
+      return executeCreateBoosterRole(
+        guild,
+        member,
+        {
+          roleName,
+          type,
+          color1,
+          color2,
+          imageAttachment,
+          anchorRoleId: boosterGuildCfg?.boosterAnchorRoleId ?? null,
+        },
+        replyFn,
+      );
+    }
+
+    if (commandName === "editboostercolor") {
+      await interaction.deferReply({ ephemeral: true });
+      const type = interaction.options.getString("type");
+      const color1 = interaction.options.getString("color1");
+      const color2 = interaction.options.getString("color2") ?? null;
+      return executeEditBoosterColor(
+        guild,
+        member,
+        { type, color1, color2 },
+        replyFn,
+      );
+    }
+
+    if (commandName === "boosterroleimage") {
+      await interaction.deferReply({ ephemeral: true });
+      const imageAttachment = interaction.options.getAttachment("icon");
+      return executeBoosterRoleImage(guild, member, imageAttachment, replyFn);
+    }
+
+    if (commandName === "deleteboosterrole") {
+      await interaction.deferReply({ ephemeral: true });
+      return executeDeleteBoosterRole(guild, member, replyFn);
     }
   } catch (err) {
     console.error("[interactionCreate] Unhandled error:", err);

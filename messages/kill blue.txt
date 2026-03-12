@@ -1,0 +1,8 @@
+{role}
+**{mangaName}** is out now! Read it from here -
+
+**{chapterName}**
+
+# Official Chapter links
+* [KManga Kodansha](<{kmangaLink}>) (Please support the official if you have the means to do so)
+* [Pocket Shonen Magazine](<{pocketLink}>) (this will net the author the most, available globally)

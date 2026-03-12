@@ -29,6 +29,7 @@ function readGuildEntry(guildId) {
     mangaName: process.env[`${prefix}MANGA_NAME`] ?? null,
     mangaReleaseTime: process.env[`${prefix}MANGA_RELEASE_TIME`] ?? null,
     botNickname: process.env[`${prefix}BOT_NICKNAME`] ?? null,
+    boosterAnchorRoleId: process.env[`${prefix}BOOSTER_ANCHOR_ROLE_ID`] ?? null,
   };
 }
 
@@ -52,6 +53,7 @@ function normalizeLegacyEntry(guildId, entry) {
     mangaUpdatesRole: null,
     mangaName: null,
     mangaReleaseTime: null,
+    boosterAnchorRoleId: null,
   };
 }
 
@@ -86,6 +88,7 @@ function getAllGuildConfigs() {
       mangaUpdatesRole: null,
       mangaName: null,
       mangaReleaseTime: null,
+      boosterAnchorRoleId: null,
     },
   ];
 }
@@ -102,11 +105,16 @@ function getReportsChannelId(guildId) {
 
 /**
  * Minimum tier required to run each command.
- *   Tier 1 → crosscheck, crosskick, reports, help  (lowest)
+ *   Tier 0 → everyone (no role check)
+ *   Tier 1 → crosscheck, crosskick, reports, help  (lowest staff)
  *   Tier 2 → crossmute, crossunmute, mangacheck
- *   Tier 3 → crossban, crossunban                  (highest)
+ *   Tier 3 → crossban, crossunban                  (highest staff)
+ *
+ * Booster commands are tier 0 — open to all, but internally gated
+ * behind the "is booster" check inside each handler.
  */
 const COMMAND_TIERS = {
+  // staff commands
   crosscheck: 1,
   crosskick: 1,
   reports: 1,
@@ -117,6 +125,11 @@ const COMMAND_TIERS = {
   crossban: 3,
   crossunban: 3,
   archive: 1,
+  // booster commands (open tier — booster check is inside the handler)
+  createboosterrole: 0,
+  editboostercolor: 0,
+  boosterroleimage: 0,
+  deleteboosterrole: 0,
 };
 
 /**
@@ -127,6 +140,7 @@ const COMMAND_TIERS = {
  * args        — argument descriptors for the detailed view
  */
 const COMMAND_CATALOG = [
+  // ── Staff commands ──────────────────────────────────────────────────────────
   {
     name: "crosscheck",
     tier: 1,
@@ -233,6 +247,49 @@ const COMMAND_CATALOG = [
       "`input` — Paste a custom emoji (e.g. `<:name:id>`) or a bare sticker ID.",
     ],
   },
+  // ── Booster commands (tier 0 — open to all, but requires active boost) ──────
+  {
+    name: "createboosterrole",
+    tier: 0,
+    usage: "&createBoosterRole <name> [type] [color1] [color2]",
+    description: "🚀 Boosters only — Create your own custom server role.",
+    args: [
+      "`name` — The name for your role (required).",
+      "`type` *(optional)* — `solid` (default), `gradient`, or `holographic`.",
+      "`color1` *(optional)* — Primary hex colour, e.g. `FF0000` or `#FF0000`.",
+      "`color2` *(optional, gradient only)* — Secondary hex colour for gradient.",
+      "*Attach an image* to set it as your role icon (requires server Level 2).",
+    ],
+  },
+  {
+    name: "editboostercolor",
+    tier: 0,
+    usage: "&editBoosterColor <type> <color1> [color2]",
+    description: "🚀 Boosters only — Edit your booster role's colour/type.",
+    args: [
+      "`type` — `solid`, `gradient`, or `holographic`.",
+      "`color1` — Primary hex colour.",
+      "`color2` *(gradient only)* — Secondary hex colour.",
+    ],
+  },
+  {
+    name: "boosterroleimage",
+    tier: 0,
+    usage: "&boosterRoleImage  (attach an image)",
+    description:
+      "🚀 Boosters only — Set your booster role's icon from an image.",
+    args: [
+      "*Attach an image* to the message — it will be set as your role icon.",
+      "Requires the server to have the **Role Icons** feature (Level 2 boost).",
+    ],
+  },
+  {
+    name: "deleteboosterrole",
+    tier: 0,
+    usage: "&deleteBoosterRole",
+    description: "🚀 Boosters only — Delete your custom booster role.",
+    args: [],
+  },
 ];
 
 /**
@@ -243,7 +300,7 @@ const COMMAND_CATALOG = [
  */
 function hasTierAccess(member, config, command) {
   const requiredTier = COMMAND_TIERS[command] ?? 3;
-  if (requiredTier === 0) return true; // help is public
+  if (requiredTier === 0) return true; // tier 0 is public
 
   const allowedRoles = [];
   for (let tier = requiredTier; tier <= 3; tier++) {
