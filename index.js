@@ -45,6 +45,7 @@ const {
   executeEditBoosterColor,
   executeBoosterRoleImage,
   executeDeleteBoosterRole,
+  executeClaimBoosterRole,
 } = require("./commands/booster");
 
 // ─── CLIENT ───────────────────────────────────────────────────────────────────
@@ -281,6 +282,20 @@ const crossCommands = [
   new SlashCommandBuilder()
     .setName("deleteboosterrole")
     .setDescription("🚀 Boosters only — Delete your custom booster role"),
+
+  new SlashCommandBuilder()
+    .setName("claimboosterrole")
+    .setDescription(
+      "🚀 Boosters only — Claim an existing role (e.g. from Booster Bot) into this system",
+    )
+    .addStringOption((o) =>
+      o
+        .setName("roleid")
+        .setDescription(
+          "Role ID to claim (optional if you only have one eligible role)",
+        )
+        .setRequired(false),
+    ),
 ].map((c) => c.toJSON());
 
 // ─── MANGA SCHEDULER ──────────────────────────────────────────────────────────
@@ -374,6 +389,7 @@ client.on("messageCreate", async (message) => {
         "editboostercolor",
         "boosterroleimage",
         "deleteboosterrole",
+        "claimboosterrole",
       ].includes(command)
     ) {
       const replyFn = (c) => message.reply(c);
@@ -423,6 +439,27 @@ client.on("messageCreate", async (message) => {
       }
       if (command === "deleteboosterrole") {
         return executeDeleteBoosterRole(message.guild, message.member, replyFn);
+      }
+      if (command === "claimboosterrole") {
+        const specifiedRoleId = args[1]?.replace(/[<@&>]/g, "") ?? null;
+        const guildCfg2 = getGuildConfig(message.guild.id);
+        const configRoleIds = [
+          ...(guildCfg2?.tier1Roles ?? []),
+          ...(guildCfg2?.tier2Roles ?? []),
+          ...(guildCfg2?.tier3Roles ?? []),
+        ];
+        return executeClaimBoosterRole(
+          message.guild,
+          message.member,
+          {
+            specifiedRoleId,
+            configRoleIds,
+            bottomAnchorRoleId: guildCfg2?.bottomBoosterAnchorRoleId ?? null,
+            ignoredBoosterRoles: guildCfg2?.ignoredBoosterRoles ?? [],
+          },
+          replyFn,
+          guildCfg2?.boosterAnchorRoleId ?? null,
+        );
       }
     }
 
@@ -736,6 +773,7 @@ client.on("interactionCreate", async (interaction) => {
         "editboostercolor",
         "boosterroleimage",
         "deleteboosterrole",
+        "claimboosterrole",
       ].includes(commandName)
     ) {
       await interaction.deferReply({ ephemeral: true });
@@ -781,6 +819,29 @@ client.on("interactionCreate", async (interaction) => {
       }
       if (commandName === "deleteboosterrole") {
         return executeDeleteBoosterRole(guild, member, replyFn);
+      }
+      if (commandName === "claimboosterrole") {
+        const specifiedRoleId =
+          interaction.options.getString("roleid")?.trim() ?? null;
+        const boosterGuildCfg2 = getGuildConfig(guild.id);
+        const configRoleIds = [
+          ...(boosterGuildCfg2?.tier1Roles ?? []),
+          ...(boosterGuildCfg2?.tier2Roles ?? []),
+          ...(boosterGuildCfg2?.tier3Roles ?? []),
+        ];
+        return executeClaimBoosterRole(
+          guild,
+          member,
+          {
+            specifiedRoleId,
+            configRoleIds,
+            bottomAnchorRoleId:
+              boosterGuildCfg2?.bottomBoosterAnchorRoleId ?? null,
+            ignoredBoosterRoles: boosterGuildCfg2?.ignoredBoosterRoles ?? [],
+          },
+          replyFn,
+          boosterGuildCfg2?.boosterAnchorRoleId ?? null,
+        );
       }
     }
 

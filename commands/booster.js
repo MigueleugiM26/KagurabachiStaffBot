@@ -528,6 +528,141 @@ async function executeDeleteBoosterRole(guild, member, reply) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * &claimBoosterRole / /claimboosterrole
+ *
+ * Lets a user who already has a role from Booster Bot (or any other source)
+ * register it in this bot's database so they can use &editBoosterColor etc.
+ *
+ * Detection logic:
+ *   - Role must be below the anchor role in position (the booster zone)
+ *   - Role must not be bot-managed (no integration roles)
+ *   - Role must not be any configured tier role
+ *   - Role must not be @everyone
+ *   If exactly one candidate is found it is claimed automatically.
+ *   If multiple are found the user must specify a role ID or mention.
+ */
+async function executeClaimBoosterRole(
+  guild,
+  member,
+  opts,
+  reply,
+  anchorRoleId,
+) {
+  if (!isBooster(member)) {
+    return reply("❌ You need to be a **server booster** to use this command.");
+  }
+
+  // Already tracked?
+  const existing = await getEntry(guild.id, member.id);
+  if (existing) {
+    return reply(
+      "❌ You already have a booster role registered. Use `editBoosterColor`, `boosterRoleImage`, or `deleteBoosterRole` to manage it.",
+    );
+  }
+
+  // Resolve top anchor (ceiling) and optional bottom anchor (floor)
+  let topPos = null; // roles must be strictly below this
+  let bottomPos = null; // roles must be strictly above this
+
+  if (anchorRoleId) {
+    try {
+      const anchor =
+        guild.roles.cache.get(anchorRoleId) ??
+        (await guild.roles.fetch(anchorRoleId));
+      if (anchor) topPos = anchor.position;
+    } catch {}
+  }
+
+  const {
+    bottomAnchorRoleId,
+    configRoleIds = [],
+    ignoredBoosterRoles = [],
+  } = opts;
+  if (bottomAnchorRoleId) {
+    try {
+      const bottom =
+        guild.roles.cache.get(bottomAnchorRoleId) ??
+        (await guild.roles.fetch(bottomAnchorRoleId));
+      if (bottom) bottomPos = bottom.position;
+    } catch {}
+  }
+
+  // All IDs to exclude
+  const excludedIds = new Set([...configRoleIds, ...ignoredBoosterRoles]);
+
+  // Find candidate roles: assigned to this member, within the booster zone, not managed, not excluded
+  await guild.members.fetch(member.id);
+  const candidates = member.roles.cache.filter(
+    (r) =>
+      r.id !== guild.id && // not @everyone
+      !r.managed && // not a bot-integration role
+      !excludedIds.has(r.id) && // not excluded
+      (topPos === null || r.position < topPos) && // below top anchor
+      (bottomPos === null || r.position > bottomPos), // above bottom anchor
+  );
+
+  // If user provided a specific role ID or mention, use that
+  const { specifiedRoleId } = opts;
+  if (specifiedRoleId) {
+    const role = candidates.get(specifiedRoleId);
+    if (!role) {
+      return reply(
+        "❌ That role wasn't found on your profile, or it doesn't qualify (wrong position, bot-managed, or excluded).",
+      );
+    }
+    return _claimRole(guild, member, role, reply);
+  }
+
+  if (candidates.size === 0) {
+    return reply(
+      "❌ No claimable roles found. Make sure your Booster Bot role is positioned between the top and bottom anchor roles.",
+    );
+  }
+
+  if (candidates.size === 1) {
+    return _claimRole(guild, member, candidates.first(), reply);
+  }
+
+  // Multiple candidates — ask user to pick
+  const list = candidates
+    .map((r) => `• **${r.name}** (\`${r.id}\`)`)
+    .join("\n");
+  return reply(
+    `⚠️ Multiple claimable roles found. Re-run with the role ID you want to claim:\n` +
+      `\`&claimBoosterRole <roleID>\`\n\n${list}`,
+  );
+}
+
+async function _claimRole(guild, member, role, reply) {
+  try {
+    await upsertEntry(guild.id, member.id, {
+      roleId: role.id,
+      type: "solid",
+      color1: role.color
+        ? `#${role.color.toString(16).toUpperCase().padStart(6, "0")}`
+        : null,
+      color2: null,
+    });
+  } catch (err) {
+    console.error("[claimBoosterRole] persist error:", err.message);
+    return reply("❌ Failed to save to database. Please try again.");
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(role.color || 0x99aab5)
+    .setTitle("🔗 Booster Role Claimed")
+    .setDescription(
+      `**${role.name}** has been linked to your account.\nYou can now use \`&editBoosterColor\`, \`&boosterRoleImage\`, and \`&deleteBoosterRole\` on it.`,
+    )
+    .setFooter({ text: "This role was imported from an external source." })
+    .setTimestamp();
+
+  return reply({ embeds: [embed] });
+}
+
 // ─── EXPORTS ──────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -535,4 +670,5 @@ module.exports = {
   executeEditBoosterColor,
   executeBoosterRoleImage,
   executeDeleteBoosterRole,
+  executeClaimBoosterRole,
 };

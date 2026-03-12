@@ -30,6 +30,9 @@ function readGuildEntry(guildId) {
     mangaReleaseTime: process.env[`${prefix}MANGA_RELEASE_TIME`] ?? null,
     botNickname: process.env[`${prefix}BOT_NICKNAME`] ?? null,
     boosterAnchorRoleId: process.env[`${prefix}BOOSTER_ANCHOR_ROLE_ID`] ?? null,
+    bottomBoosterAnchorRoleId:
+      process.env[`${prefix}BOTTOM_BOOSTER_ANCHOR_ROLE_ID`] ?? null,
+    ignoredBoosterRoles: splitRoles(`${prefix}IGNORED_BOOSTER_ROLES`),
   };
 }
 
@@ -54,6 +57,8 @@ function normalizeLegacyEntry(guildId, entry) {
     mangaName: null,
     mangaReleaseTime: null,
     boosterAnchorRoleId: null,
+    bottomBoosterAnchorRoleId: null,
+    ignoredBoosterRoles: [],
   };
 }
 
@@ -89,6 +94,8 @@ function getAllGuildConfigs() {
       mangaName: null,
       mangaReleaseTime: null,
       boosterAnchorRoleId: null,
+      bottomBoosterAnchorRoleId: null,
+      ignoredBoosterRoles: [],
     },
   ];
 }
@@ -130,6 +137,7 @@ const COMMAND_TIERS = {
   editboostercolor: 0,
   boosterroleimage: 0,
   deleteboosterrole: 0,
+  claimboosterrole: 0,
 };
 
 /**
@@ -289,6 +297,16 @@ const COMMAND_CATALOG = [
     usage: "&deleteBoosterRole",
     description: "🚀 Boosters only — Delete your custom booster role.",
     args: [],
+  },
+  {
+    name: "claimboosterrole",
+    tier: 0,
+    usage: "&claimBoosterRole [roleID]",
+    description:
+      "🚀 Boosters only — Claim an existing role (e.g. from Booster Bot) into this system.",
+    args: [
+      "`roleID` *(optional)* — The ID of the role to claim. Only needed if you have multiple eligible roles.",
+    ],
   },
 ];
 
