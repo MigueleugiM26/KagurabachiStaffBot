@@ -733,12 +733,63 @@ client.on("interactionCreate", async (interaction) => {
       "contact",
       "serverlist",
       "archive",
-      // booster commands
-      "createboosterrole",
-      "editboostercolor",
-      "boosterroleimage",
-      "deleteboosterrole",
     ];
+
+    // ── Booster commands — handled before validCommands check to avoid double-deferReply ──
+    if (
+      [
+        "createboosterrole",
+        "editboostercolor",
+        "boosterroleimage",
+        "deleteboosterrole",
+      ].includes(commandName)
+    ) {
+      await interaction.deferReply({ ephemeral: true });
+      const replyFn = async (c) =>
+        interaction.editReply(typeof c === "string" ? { content: c } : c);
+      const boosterGuildCfg = getGuildConfig(guild.id);
+
+      if (commandName === "createboosterrole") {
+        const roleName = interaction.options.getString("name");
+        const type = interaction.options.getString("type") ?? "solid";
+        const color1 = interaction.options.getString("color1") ?? null;
+        const color2 = interaction.options.getString("color2") ?? null;
+        const imageAttachment =
+          interaction.options.getAttachment("icon") ?? null;
+        return executeCreateBoosterRole(
+          guild,
+          member,
+          {
+            roleName,
+            type,
+            color1,
+            color2,
+            imageAttachment,
+            anchorRoleId: boosterGuildCfg?.boosterAnchorRoleId ?? null,
+          },
+          replyFn,
+        );
+      }
+      if (commandName === "editboostercolor") {
+        const type = interaction.options.getString("type");
+        const color1 = interaction.options.getString("color1");
+        const color2 = interaction.options.getString("color2") ?? null;
+        return executeEditBoosterColor(
+          guild,
+          member,
+          { type, color1, color2 },
+          replyFn,
+        );
+      }
+      if (commandName === "boosterroleimage") {
+        const imageAttachment = interaction.options.getAttachment("icon");
+        return executeBoosterRoleImage(guild, member, imageAttachment, replyFn);
+      }
+      if (commandName === "deleteboosterrole") {
+        return executeDeleteBoosterRole(guild, member, replyFn);
+      }
+    }
+
     if (!validCommands.includes(commandName)) return;
 
     // contact — open to everyone, no tier check needed
@@ -909,65 +960,6 @@ client.on("interactionCreate", async (interaction) => {
         full,
         replyTarget: interaction,
       });
-    }
-
-    // ── Booster commands ─────────────────────────────────────────────────────
-    // These are handled outside the tier-gated block because they have no
-    // userId argument and are open to everyone (booster check is inside).
-    const replyFn = async (c) => {
-      if (interaction.deferred || interaction.replied)
-        return interaction.editReply(c);
-      return interaction.reply({
-        ...(typeof c === "string" ? { content: c } : c),
-        ephemeral: true,
-      });
-    };
-
-    if (commandName === "createboosterrole") {
-      await interaction.deferReply({ ephemeral: true });
-      const roleName = interaction.options.getString("name");
-      const type = interaction.options.getString("type") ?? "solid";
-      const color1 = interaction.options.getString("color1") ?? null;
-      const color2 = interaction.options.getString("color2") ?? null;
-      const imageAttachment = interaction.options.getAttachment("icon") ?? null;
-      const boosterGuildCfg = getGuildConfig(guild.id);
-      return executeCreateBoosterRole(
-        guild,
-        member,
-        {
-          roleName,
-          type,
-          color1,
-          color2,
-          imageAttachment,
-          anchorRoleId: boosterGuildCfg?.boosterAnchorRoleId ?? null,
-        },
-        replyFn,
-      );
-    }
-
-    if (commandName === "editboostercolor") {
-      await interaction.deferReply({ ephemeral: true });
-      const type = interaction.options.getString("type");
-      const color1 = interaction.options.getString("color1");
-      const color2 = interaction.options.getString("color2") ?? null;
-      return executeEditBoosterColor(
-        guild,
-        member,
-        { type, color1, color2 },
-        replyFn,
-      );
-    }
-
-    if (commandName === "boosterroleimage") {
-      await interaction.deferReply({ ephemeral: true });
-      const imageAttachment = interaction.options.getAttachment("icon");
-      return executeBoosterRoleImage(guild, member, imageAttachment, replyFn);
-    }
-
-    if (commandName === "deleteboosterrole") {
-      await interaction.deferReply({ ephemeral: true });
-      return executeDeleteBoosterRole(guild, member, replyFn);
     }
   } catch (err) {
     console.error("[interactionCreate] Unhandled error:", err);
