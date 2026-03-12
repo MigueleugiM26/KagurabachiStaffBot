@@ -8,11 +8,6 @@
 // Each document looks like:
 //   { guildId, userId, roleId, type, color1, color2, createdAt }
 //   with a unique compound index on { guildId, userId }.
-//
-// Optional dep for gradient / holographic icons:
-//   npm install canvas
-// If canvas is not installed the role is still created — just without an
-// auto-generated icon (user-uploaded images always work regardless).
 
 const { EmbedBuilder, Colors } = require("discord.js");
 const { MongoClient } = require("mongodb");
@@ -37,14 +32,6 @@ async function getCollection() {
       .createIndex({ guildId: 1, userId: 1 }, { unique: true });
   }
   return _db.collection("booster_roles");
-}
-
-// ── canvas is optional ────────────────────────────────────────────────────────
-let createCanvas;
-try {
-  ({ createCanvas } = require("canvas"));
-} catch {
-  /* icon gen disabled */
 }
 
 // ─── DATA LAYER ───────────────────────────────────────────────────────────────
@@ -108,18 +95,7 @@ function normaliseHex(hex) {
   return hex ? `#${hex.replace(/^#/, "").toUpperCase()}` : null;
 }
 
-// Returns the `colors` array Discord expects for role.edit({ colors })
-// solid     → [c1]
-// gradient  → [c1, c2]
-// holographic → a fixed purple-to-teal gradient (no canvas needed)
-function buildColors(type, color1, color2) {
-  if (type === "holographic") return [0xb44fe8, 0x4fe8c8];
-  if (type === "gradient" && color2)
-    return [parseHex(color1) ?? 0x99aab5, parseHex(color2) ?? 0x99aab5];
-  return [parseHex(color1) ?? 0x99aab5];
-}
-
-// Single colour for embed display
+// Single colour for the role and embed display
 function dominantColor(type, color1) {
   if (type === "holographic") return 0xb44fe8;
   return parseHex(color1) ?? 0x99aab5;
@@ -134,71 +110,6 @@ async function anchorPosition(guild, anchorRoleId) {
     return anchor ? anchor.position : 0;
   } catch {
     return 0;
-  }
-}
-
-// ─── ICON GENERATION (canvas) ────────────────────────────────────────────────
-
-function makeGradientIcon(hex1, hex2) {
-  if (!createCanvas) return null;
-  try {
-    const SIZE = 64;
-    const canvas = createCanvas(SIZE, SIZE);
-    const ctx = canvas.getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, SIZE, SIZE);
-    grad.addColorStop(0, normaliseHex(hex1));
-    grad.addColorStop(1, normaliseHex(hex2));
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2, 0, Math.PI * 2);
-    ctx.fill();
-    return canvas.toBuffer("image/png");
-  } catch {
-    return null;
-  }
-}
-
-function makeHolographicIcon() {
-  if (!createCanvas) return null;
-  try {
-    const SIZE = 64;
-    const canvas = createCanvas(SIZE, SIZE);
-    const ctx = canvas.getContext("2d");
-
-    const rainbow = ctx.createLinearGradient(0, 0, SIZE, SIZE);
-    [
-      [0.0, "#ff0080"],
-      [0.17, "#ff8c00"],
-      [0.33, "#ffe000"],
-      [0.5, "#00e676"],
-      [0.67, "#00b0ff"],
-      [0.83, "#7c4dff"],
-      [1.0, "#ff0080"],
-    ].forEach(([pos, c]) => rainbow.addColorStop(pos, c));
-    ctx.fillStyle = rainbow;
-    ctx.beginPath();
-    ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    const shimmer = ctx.createRadialGradient(
-      22,
-      20,
-      4,
-      SIZE / 2,
-      SIZE / 2,
-      SIZE / 2,
-    );
-    shimmer.addColorStop(0, "rgba(255,255,255,0.55)");
-    shimmer.addColorStop(0.5, "rgba(255,255,255,0.10)");
-    shimmer.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = shimmer;
-    ctx.beginPath();
-    ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    return canvas.toBuffer("image/png");
-  } catch {
-    return null;
   }
 }
 
@@ -247,7 +158,7 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
   try {
     role = await guild.roles.create({
       name: roleName,
-      colors: buildColors(type, color1, color2),
+      color: dominantColor(type, color1),
       hoist: false,
       mentionable: false,
       position: pos,
@@ -261,26 +172,18 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
   }
 
   let iconNote = "";
-  if (hasIcons) {
+  if (hasIcons && imageAttachment) {
     try {
-      if (imageAttachment) {
-        await role.setIcon(
-          imageAttachment.url,
-          `Booster icon for ${member.user.tag}`,
-        );
-      } else if (type === "gradient" && color1 && color2) {
-        const buf = makeGradientIcon(color1, color2);
-        if (buf) await role.setIcon(buf, "Booster gradient icon");
-      } else if (type === "holographic") {
-        const buf = makeHolographicIcon();
-        if (buf) await role.setIcon(buf, "Booster holographic icon");
-      }
+      await role.setIcon(
+        imageAttachment.url,
+        `Booster icon for ${member.user.tag}`,
+      );
     } catch (err) {
       console.warn("[createBoosterRole] icon error:", err.message);
       iconNote =
         "\n\u26a0\ufe0f Couldn't set the role icon (the image may be too large or an unsupported format).";
     }
-  } else if (imageAttachment || type !== "solid") {
+  } else if (imageAttachment && !hasIcons) {
     iconNote =
       "\n\u26a0\ufe0f This server doesn't have the **Role Icons** feature (requires Level 2 boost).";
   }
@@ -375,37 +278,15 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
     );
 
   const newColor = dominantColor(type, color1);
-  const hasIcons = guild.features.includes("ROLE_ICONS");
-  let iconNote = "";
 
   try {
     await role.edit({
       color: newColor,
-      colors: buildColors(type, color1, color2),
       reason: "Booster colour edit",
     });
   } catch (err) {
     console.error("[editBoosterColor] setColor error:", err.message);
     return reply("\u274c Failed to update the role colour.");
-  }
-
-  if (hasIcons) {
-    try {
-      if (type === "gradient" && color1 && color2) {
-        const buf = makeGradientIcon(color1, color2);
-        if (buf) await role.setIcon(buf, "Booster gradient icon update");
-      } else if (type === "holographic") {
-        const buf = makeHolographicIcon();
-        if (buf) await role.setIcon(buf, "Booster holographic icon update");
-        // canvas not installed — holographic icon skipped, role color still updated
-      } else {
-        await role
-          .setIcon(null, "Booster solid colour — icon cleared")
-          .catch(() => {});
-      }
-    } catch (err) {
-      console.warn("[editBoosterColor] icon error:", err.message);
-    }
   }
 
   try {
@@ -418,14 +299,12 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
     });
   } catch (err) {
     console.error("[editBoosterColor] persist error:", err.message);
-    iconNote +=
-      "\n\u26a0\ufe0f Colour updated, but failed to save to database.";
   }
 
   const embed = new EmbedBuilder()
     .setColor(newColor)
     .setTitle("\ud83c\udfa8 Booster Role Updated")
-    .setDescription(`**${role.name}** has been updated.${iconNote}`)
+    .setDescription(`**${role.name}** has been updated.`)
     .addFields(
       { name: "Type", value: type, inline: true },
       ...(type !== "holographic" && color1
