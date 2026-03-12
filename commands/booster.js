@@ -24,7 +24,11 @@ let _db = null;
 
 async function getCollection() {
   if (!_db) {
-    _client = new MongoClient(process.env.MONGODB_URI);
+    _client = new MongoClient(process.env.MONGODB_URI, {
+      tls: true,
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+    });
     await _client.connect();
     _db = _client.db(); // uses the DB name embedded in the URI
     // Ensure unique index exists (safe to call repeatedly — no-op if already there)
@@ -115,7 +119,7 @@ async function anchorPosition(guild, anchorRoleId) {
     const anchor =
       guild.roles.cache.get(anchorRoleId) ??
       (await guild.roles.fetch(anchorRoleId));
-    return anchor ? Math.max(0, anchor.position - 1) : 0;
+    return anchor ? anchor.position : 0;
   } catch {
     return 0;
   }
