@@ -8,6 +8,11 @@
 // Each document looks like:
 //   { guildId, userId, roleId, type, color1, color2, createdAt }
 //   with a unique compound index on { guildId, userId }.
+//
+// Optional dep for gradient / holographic icons:
+//   npm install canvas
+// If canvas is not installed the role is still created — just without an
+// auto-generated icon (user-uploaded images always work regardless).
 
 const { EmbedBuilder, Colors } = require("discord.js");
 const { MongoClient } = require("mongodb");
@@ -95,7 +100,26 @@ function normaliseHex(hex) {
   return hex ? `#${hex.replace(/^#/, "").toUpperCase()}` : null;
 }
 
-// Single colour for the role and embed display
+// Returns the RoleColors object discord.js expects for role.edit({ colors })
+// solid       → { primaryColor }
+// gradient    → { primaryColor, secondaryColor }
+// holographic → { primaryColor, secondaryColor, tertiaryColor }
+function buildColors(type, color1, color2) {
+  if (type === "holographic")
+    return {
+      primaryColor: 0xab1ee8,
+      secondaryColor: 0x10c8e8,
+      tertiaryColor: 0xffd04e,
+    };
+  if (type === "gradient" && color2)
+    return {
+      primaryColor: parseHex(color1) ?? 0x99aab5,
+      secondaryColor: parseHex(color2) ?? 0x99aab5,
+    };
+  return { primaryColor: parseHex(color1) ?? 0x99aab5 };
+}
+
+// Single colour for embed display
 function dominantColor(type, color1) {
   if (type === "holographic") return 0xb44fe8;
   return parseHex(color1) ?? 0x99aab5;
@@ -158,7 +182,7 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
   try {
     role = await guild.roles.create({
       name: roleName,
-      color: dominantColor(type, color1),
+      colors: buildColors(type, color1, color2),
       hoist: false,
       mentionable: false,
       position: pos,
@@ -281,7 +305,7 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
 
   try {
     await role.edit({
-      color: newColor,
+      colors: buildColors(type, color1, color2),
       reason: "Booster colour edit",
     });
   } catch (err) {
