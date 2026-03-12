@@ -14,7 +14,7 @@
 // If canvas is not installed the role is still created — just without an
 // auto-generated icon (user-uploaded images always work regardless).
 
-const { EmbedBuilder, Colors, Constants } = require("discord.js");
+const { EmbedBuilder, Colors } = require("discord.js");
 const { MongoClient } = require("mongodb");
 
 // ── MongoDB client (lazy singleton) ──────────────────────────────────────────
@@ -100,12 +100,17 @@ function normaliseHex(hex) {
   return hex ? `#${hex.replace(/^#/, "").toUpperCase()}` : null;
 }
 
-// Returns the RoleColors object discord.js expects for role.edit({ colors })
-// solid       → { primaryColor }
-// gradient    → { primaryColor, secondaryColor }
-// holographic → Constants.HolographicStyle (Discord enforces its own fixed values when tertiaryColor is set)
+// Returns the RoleColors object discord.js expects for role.edit/create({ colors })
+// Holographic values are fixed by Discord's API (docs: primaryColor=11127295, secondaryColor=16759788, tertiaryColor=16761760)
+// Setting any tertiaryColor forces Discord into holographic mode regardless of the other values.
+const HOLOGRAPHIC_COLORS = {
+  primaryColor: 11127295,
+  secondaryColor: 16759788,
+  tertiaryColor: 16761760,
+};
+
 function buildColors(type, color1, color2) {
-  if (type === "holographic") return Constants.HolographicStyle;
+  if (type === "holographic") return HOLOGRAPHIC_COLORS;
   if (type === "gradient" && color2)
     return {
       primaryColor: parseHex(color1) ?? 0x99aab5,
