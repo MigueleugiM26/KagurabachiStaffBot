@@ -437,177 +437,193 @@ client.on("messageCreate", async (message) => {
 // ─── SLASH COMMAND HANDLER ────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
-  if (interaction.isButton()) {
-    await handleAppealButton(client, crossActionInProgress, interaction);
-    return;
-  }
-
-  if (!interaction.isChatInputCommand()) return;
-
-  const { commandName, guild, member } = interaction;
-  const validCommands = [
-    "crossmute",
-    "crossunmute",
-    "crossban",
-    "crossunban",
-    "crosskick",
-    "crosscheck",
-    "mangacheck",
-    "reports",
-    "help",
-    "contact",
-    "serverlist",
-  ];
-  if (!validCommands.includes(commandName)) return;
-
-  // contact — open to everyone, no tier check needed
-  if (commandName === "contact") {
-    const embed = new EmbedBuilder()
-      .setColor(Colors.Blurple)
-      .setTitle("📬  Contact the Bot Owner")
-      .setDescription(
-        "For questions, issues, or setup requests about this bot, reach out on Discord:\n\n" +
-          "<@450842915024142374>",
-      )
-      .setFooter({
-        text: "You can send a friend request or DM directly if you share a server.",
-      });
-    return interaction.reply({ embeds: [embed], ephemeral: true });
-  }
-
-  // serverlist — open to everyone, no tier check needed
-  if (commandName === "serverlist") {
-    const guilds = [...client.guilds.cache.values()].sort((a, b) =>
-      a.name.localeCompare(b.name),
-    );
-    const list = guilds.map((g) => `• **${g.name}** (\`${g.id}\`)`).join("\n");
-    const embed = new EmbedBuilder()
-      .setColor(Colors.Blurple)
-      .setTitle(`🌐  Servers (${guilds.length})`)
-      .setDescription(list || "No servers found.");
-    return interaction.reply({ embeds: [embed], ephemeral: true });
-  }
-
-  const config = getGuildConfig(guild.id);
-  if (
-    !hasTierAccess(
-      member,
-      config ?? { tier1Roles: [], tier2Roles: [], tier3Roles: [] },
-      commandName,
-    )
-  ) {
-    return interaction.reply({
-      content: "❌ You don't have permission to use this command.",
-      ephemeral: true,
-    });
-  }
-
-  // help doesn't need deferReply or a userId
-  if (commandName === "help") {
-    const target =
-      interaction.options.getString("command")?.toLowerCase() ?? null;
-    return interaction.reply({
-      ...buildHelpPayload(target, config, guild),
-      ephemeral: false,
-    });
-  }
-
-  await interaction.deferReply();
-
-  const userId =
-    (interaction.options.getString("userid") ?? "").replace(/[<@!>]/g, "") ||
-    null;
-  const reason =
-    interaction.options.getString("reason") || "No reason provided";
-  const staffName = member.user.username;
-  const staffId = member.user.id;
-  const imageUrl = interaction.options.getAttachment?.("image")?.url ?? null;
-  const sourceGuild = { id: guild.id, name: guild.name };
-
-  if (commandName === "crossmute") {
-    const durationStr = interaction.options.getString("duration");
-    await executeCrossMute(client, crossActionInProgress, {
-      userId,
-      durationStr,
-      reason,
-      staffName,
-      staffId,
-      imageUrl,
-      sourceGuild,
-      replyTarget: interaction,
-    });
-  } else if (commandName === "crossunmute") {
-    await executeCrossUnmute(client, crossActionInProgress, {
-      userId,
-      reason,
-      staffName,
-      staffId,
-      sourceGuild,
-      replyTarget: interaction,
-    });
-  } else if (commandName === "crossban") {
-    await executeCrossBan(client, crossActionInProgress, {
-      userId,
-      reason,
-      staffName,
-      staffId,
-      imageUrl,
-      sourceGuild,
-      replyTarget: interaction,
-    });
-  } else if (commandName === "crossunban") {
-    await executeCrossUnban(client, crossActionInProgress, {
-      userId,
-      reason,
-      staffName,
-      staffId,
-      sourceGuild,
-      replyTarget: interaction,
-    });
-  } else if (commandName === "crosskick") {
-    await executeCrossKick(client, crossActionInProgress, {
-      userId,
-      reason,
-      staffName,
-      staffId,
-      imageUrl,
-      sourceGuild,
-      replyTarget: interaction,
-    });
-  } else if (commandName === "crosscheck") {
-    await executeCrossCheck(client, {
-      userId,
-      staffId,
-      sourceGuild,
-      replyTarget: interaction,
-    });
-  } else if (commandName === "mangacheck") {
-    if (!mangaScheduler)
-      return interaction.editReply(
-        "⏳ Bot is still initializing, try again in a moment.",
-      );
-    try {
-      const result = await mangaScheduler.manualCheck(guild.id);
-      if (result) {
-        await interaction.editReply(
-          `✅ Posted: **${result.chapterName}**\n${result.chapterLink}`,
-        );
-      } else {
-        await interaction.editReply(
-          "ℹ️ No new chapter found — either it's a break week, it was already posted, or manga updates aren't configured for this server.",
-        );
-      }
-    } catch (err) {
-      await interaction.editReply(`❌ Error: ${err.message}`);
+  try {
+    if (interaction.isButton()) {
+      await handleAppealButton(client, crossActionInProgress, interaction);
+      return;
     }
-  } else if (commandName === "reports") {
-    const full = interaction.options.getBoolean("full") ?? true;
-    await executeReports(client, {
-      userId,
-      sourceGuildId: guild.id,
-      full,
-      replyTarget: interaction,
-    });
+
+    if (!interaction.isChatInputCommand()) return;
+
+    const { commandName, guild, member } = interaction;
+    const validCommands = [
+      "crossmute",
+      "crossunmute",
+      "crossban",
+      "crossunban",
+      "crosskick",
+      "crosscheck",
+      "mangacheck",
+      "reports",
+      "help",
+      "contact",
+      "serverlist",
+    ];
+    if (!validCommands.includes(commandName)) return;
+
+    // contact — open to everyone, no tier check needed
+    if (commandName === "contact") {
+      const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle("📬  Contact the Bot Owner")
+        .setDescription(
+          "For questions, issues, or setup requests about this bot, reach out on Discord:\n\n" +
+            "<@450842915024142374>",
+        )
+        .setFooter({
+          text: "You can send a friend request or DM directly if you share a server.",
+        });
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+
+    // serverlist — open to everyone, no tier check needed
+    if (commandName === "serverlist") {
+      const guilds = [...client.guilds.cache.values()].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
+      const list = guilds
+        .map((g) => `• **${g.name}** (\`${g.id}\`)`)
+        .join("\n");
+      const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle(`🌐  Servers (${guilds.length})`)
+        .setDescription(list || "No servers found.");
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+
+    const config = getGuildConfig(guild.id);
+    if (
+      !hasTierAccess(
+        member,
+        config ?? { tier1Roles: [], tier2Roles: [], tier3Roles: [] },
+        commandName,
+      )
+    ) {
+      return interaction.reply({
+        content: "❌ You don't have permission to use this command.",
+        ephemeral: true,
+      });
+    }
+
+    // help doesn't need deferReply or a userId
+    if (commandName === "help") {
+      const target =
+        interaction.options.getString("command")?.toLowerCase() ?? null;
+      return interaction.reply({
+        ...buildHelpPayload(target, config, guild),
+        ephemeral: false,
+      });
+    }
+
+    await interaction.deferReply();
+
+    const userId =
+      (interaction.options.getString("userid") ?? "").replace(/[<@!>]/g, "") ||
+      null;
+    const reason =
+      interaction.options.getString("reason") || "No reason provided";
+    const staffName = member.user.username;
+    const staffId = member.user.id;
+    const imageUrl = interaction.options.getAttachment?.("image")?.url ?? null;
+    const sourceGuild = { id: guild.id, name: guild.name };
+
+    if (commandName === "crossmute") {
+      const durationStr = interaction.options.getString("duration");
+      await executeCrossMute(client, crossActionInProgress, {
+        userId,
+        durationStr,
+        reason,
+        staffName,
+        staffId,
+        imageUrl,
+        sourceGuild,
+        replyTarget: interaction,
+      });
+    } else if (commandName === "crossunmute") {
+      await executeCrossUnmute(client, crossActionInProgress, {
+        userId,
+        reason,
+        staffName,
+        staffId,
+        sourceGuild,
+        replyTarget: interaction,
+      });
+    } else if (commandName === "crossban") {
+      await executeCrossBan(client, crossActionInProgress, {
+        userId,
+        reason,
+        staffName,
+        staffId,
+        imageUrl,
+        sourceGuild,
+        replyTarget: interaction,
+      });
+    } else if (commandName === "crossunban") {
+      await executeCrossUnban(client, crossActionInProgress, {
+        userId,
+        reason,
+        staffName,
+        staffId,
+        sourceGuild,
+        replyTarget: interaction,
+      });
+    } else if (commandName === "crosskick") {
+      await executeCrossKick(client, crossActionInProgress, {
+        userId,
+        reason,
+        staffName,
+        staffId,
+        imageUrl,
+        sourceGuild,
+        replyTarget: interaction,
+      });
+    } else if (commandName === "crosscheck") {
+      await executeCrossCheck(client, {
+        userId,
+        staffId,
+        sourceGuild,
+        replyTarget: interaction,
+      });
+    } else if (commandName === "mangacheck") {
+      if (!mangaScheduler)
+        return interaction.editReply(
+          "⏳ Bot is still initializing, try again in a moment.",
+        );
+      try {
+        const result = await mangaScheduler.manualCheck(guild.id);
+        if (result) {
+          await interaction.editReply(
+            `✅ Posted: **${result.chapterName}**\n${result.chapterLink}`,
+          );
+        } else {
+          await interaction.editReply(
+            "ℹ️ No new chapter found — either it's a break week, it was already posted, or manga updates aren't configured for this server.",
+          );
+        }
+      } catch (err) {
+        await interaction.editReply(`❌ Error: ${err.message}`);
+      }
+    } else if (commandName === "reports") {
+      const full = interaction.options.getBoolean("full") ?? true;
+      await executeReports(client, {
+        userId,
+        sourceGuildId: guild.id,
+        full,
+        replyTarget: interaction,
+      });
+    }
+  } catch (err) {
+    console.error("[interactionCreate] Unhandled error:", err);
+    try {
+      const msg = "❌ An unexpected error occurred. Please try again.";
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(msg);
+      } else {
+        await interaction.reply({ content: msg, ephemeral: true });
+      }
+    } catch {
+      // interaction already expired — nothing we can do
+    }
   }
 });
 
