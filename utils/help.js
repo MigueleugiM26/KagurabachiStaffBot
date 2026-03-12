@@ -79,7 +79,7 @@ function buildHelpPayload(commandName, config, guild = null) {
     .setColor(Colors.Blurple)
     .setTitle("📋 Bot Commands")
     .setFooter({
-      text: 'Use "&help <command>" or "/help command:<name>" for details.',
+      text: 'Use "&help <command>" or "/help command:<name>" for details. Commands marked "/" are slash-only.',
     });
 
   for (const tier of [0, 1, 2, 3]) {

@@ -208,6 +208,20 @@ const COMMAND_CATALOG = [
     description: "Show all commands, or details about a specific one.",
     args: ["`command` *(optional)* — The command name to look up."],
   },
+  {
+    name: "contact",
+    tier: 0,
+    usage: "/contact",
+    description: "Get the bot owner's contact for questions or issues.",
+    args: [],
+  },
+  {
+    name: "serverlist",
+    tier: 0,
+    usage: "/serverlist",
+    description: "Show all servers this bot is currently in.",
+    args: [],
+  },
 ];
 
 /**
