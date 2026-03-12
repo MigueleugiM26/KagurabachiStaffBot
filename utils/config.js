@@ -28,6 +28,7 @@ function readGuildEntry(guildId) {
     mangaUpdatesRole: process.env[`${prefix}MANGAUPDATES_ROLE`] ?? null,
     mangaName: process.env[`${prefix}MANGA_NAME`] ?? null,
     mangaReleaseTime: process.env[`${prefix}MANGA_RELEASE_TIME`] ?? null,
+    botNickname: process.env[`${prefix}BOT_NICKNAME`] ?? null,
   };
 }
 

@@ -204,6 +204,7 @@ let mangaScheduler = null;
 
 client.once("ready", async () => {
   console.log(`✅  Logged in as ${client.user.tag}`);
+  client.user.setActivity("Staff Bot | &help");
   console.log(`🔍  Watching ${client.guilds.cache.size} guild(s)`);
 
   const configs = getAllGuildConfigs();
@@ -233,6 +234,21 @@ client.once("ready", async () => {
         `❌  Failed to register slash commands in guild ${c.guildId}:`,
         err.message,
       );
+    }
+
+    if (c.botNickname) {
+      try {
+        const guild = client.guilds.cache.get(c.guildId);
+        await guild?.members.me?.setNickname(c.botNickname);
+        console.log(
+          `✅  Nickname set to "${c.botNickname}" in guild ${c.guildId}`,
+        );
+      } catch (err) {
+        console.error(
+          `❌  Failed to set nickname in guild ${c.guildId}:`,
+          err.message,
+        );
+      }
     }
   }
 });
