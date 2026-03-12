@@ -108,7 +108,19 @@ function normaliseHex(hex) {
   return hex ? `#${hex.replace(/^#/, "").toUpperCase()}` : null;
 }
 
-function dominantColor(type, color1, color2) {
+// Returns the `colors` array Discord expects for role.edit({ colors })
+// solid     → [c1]
+// gradient  → [c1, c2]
+// holographic → a fixed purple-to-teal gradient (no canvas needed)
+function buildColors(type, color1, color2) {
+  if (type === "holographic") return [0xb44fe8, 0x4fe8c8];
+  if (type === "gradient" && color2)
+    return [parseHex(color1) ?? 0x99aab5, parseHex(color2) ?? 0x99aab5];
+  return [parseHex(color1) ?? 0x99aab5];
+}
+
+// Single colour for embed display
+function dominantColor(type, color1) {
   if (type === "holographic") return 0xb44fe8;
   return parseHex(color1) ?? 0x99aab5;
 }
@@ -228,7 +240,6 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
       "\u274c Gradient type requires **two** colours. Please provide `color2` as well.",
     );
 
-  const roleColor = dominantColor(type, color1, color2);
   const hasIcons = guild.features.includes("ROLE_ICONS");
   const pos = await anchorPosition(guild, anchorRoleId);
 
@@ -236,7 +247,7 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
   try {
     role = await guild.roles.create({
       name: roleName,
-      color: roleColor,
+      colors: buildColors(type, color1, color2),
       hoist: false,
       mentionable: false,
       position: pos,
@@ -260,15 +271,9 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
       } else if (type === "gradient" && color1 && color2) {
         const buf = makeGradientIcon(color1, color2);
         if (buf) await role.setIcon(buf, "Booster gradient icon");
-        else if (!createCanvas)
-          iconNote =
-            "\n\u26a0\ufe0f Install `canvas` to auto-generate gradient icons.";
       } else if (type === "holographic") {
         const buf = makeHolographicIcon();
         if (buf) await role.setIcon(buf, "Booster holographic icon");
-        else if (!createCanvas)
-          iconNote =
-            "\n\u26a0\ufe0f Install `canvas` to auto-generate holographic icons.";
       }
     } catch (err) {
       console.warn("[createBoosterRole] icon error:", err.message);
@@ -300,7 +305,7 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
   }
 
   const embed = new EmbedBuilder()
-    .setColor(roleColor)
+    .setColor(dominantColor(type, color1))
     .setTitle("\u2728 Booster Role Created")
     .setDescription(
       `Your custom role **${role.name}** has been created and assigned to you!${iconNote}`,
@@ -369,12 +374,15 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
       "\u274c Your booster role no longer exists. Use `deleteBoosterRole` to clean up, then `createBoosterRole` to start fresh.",
     );
 
-  const newColor = dominantColor(type, color1, color2);
+  const newColor = dominantColor(type, color1);
   const hasIcons = guild.features.includes("ROLE_ICONS");
   let iconNote = "";
 
   try {
-    await role.setColor(newColor, "Booster colour edit");
+    await role.edit({
+      colors: buildColors(type, color1, color2),
+      reason: "Booster colour edit",
+    });
   } catch (err) {
     console.error("[editBoosterColor] setColor error:", err.message);
     return reply("\u274c Failed to update the role colour.");
@@ -385,9 +393,6 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
       if (type === "gradient" && color1 && color2) {
         const buf = makeGradientIcon(color1, color2);
         if (buf) await role.setIcon(buf, "Booster gradient icon update");
-        else if (!createCanvas)
-          iconNote =
-            "\n\u26a0\ufe0f Install `canvas` to auto-generate gradient icons.";
       } else if (type === "holographic") {
         const buf = makeHolographicIcon();
         if (buf) await role.setIcon(buf, "Booster holographic icon update");
