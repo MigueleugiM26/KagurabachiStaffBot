@@ -1119,6 +1119,42 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
   }
 });
 
+// ─── BOOSTER WELCOME ─────────────────────────────────────────────────────────
+
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+  // Only fire when premium status is newly gained (null → timestamp)
+  const justBoosted =
+    !oldMember.premiumSinceTimestamp && newMember.premiumSinceTimestamp;
+  if (!justBoosted) return;
+
+  const guildId = newMember.guild.id;
+  const channelId = process.env[`GUILD_${guildId}_BOOSTER_WELCOME_CHANNEL_ID`];
+  if (!channelId) return;
+
+  try {
+    const channel = await newMember.guild.channels.fetch(channelId);
+    if (!channel) {
+      return console.error(
+        `[booster-welcome] Channel ${channelId} not found in guild ${guildId}`,
+      );
+    }
+
+    await channel.send(
+      `🚀 Thank you for boosting **${newMember.guild.name}**, <@${newMember.id}>! ` +
+        `Check the pinned messages in this channel to learn how to set up your custom booster role.`,
+    );
+
+    console.log(
+      `[booster-welcome] Welcomed new booster ${newMember.user.username} (${newMember.id}) in guild ${guildId}`,
+    );
+  } catch (err) {
+    console.error(
+      `[booster-welcome] Error sending welcome in guild ${guildId}:`,
+      err.message,
+    );
+  }
+});
+
 // ─── EXPRESS WEBHOOK SERVER ───────────────────────────────────────────────────
 
 const app = express();
