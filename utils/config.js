@@ -283,7 +283,7 @@ const COMMAND_CATALOG = [
   {
     name: "boosterroleimage",
     tier: 0,
-    usage: "&boosterRoleImage  (attach an image)",
+    usage: "&boosterRoleImage (attach an image)",
     description:
       "🚀 Boosters only — Set your booster role's icon from an image.",
     args: [
@@ -301,12 +301,10 @@ const COMMAND_CATALOG = [
   {
     name: "claimboosterrole",
     tier: 0,
-    usage: "&claimBoosterRole [roleID]",
+    usage: "&claimBoosterRole",
     description:
       "🚀 Boosters only — Claim an existing role (e.g. from Booster Bot) into this system.",
-    args: [
-      "`roleID` *(optional)* — The ID of the role to claim. Only needed if you have multiple eligible roles.",
-    ],
+    args: [],
   },
 ];
 
