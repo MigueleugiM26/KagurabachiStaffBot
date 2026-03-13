@@ -248,7 +248,6 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
     role = await guild.roles.create({
       name: roleName,
       colors: buildColors(type, color1, color2),
-      permissions: 0n,
       hoist: false,
       mentionable: false,
       position: pos,
@@ -617,18 +616,6 @@ async function executeClaimBoosterRole(
       (bottomPos === null || r.position > bottomPos), // above bottom anchor
   );
 
-  // If user provided a specific role ID or mention, use that
-  const { specifiedRoleId } = opts;
-  if (specifiedRoleId) {
-    const role = candidates.get(specifiedRoleId);
-    if (!role) {
-      return reply(
-        "❌ That role wasn't found on your profile, or it doesn't qualify (wrong position, bot-managed, or excluded).",
-      );
-    }
-    return _claimRole(guild, member, role, reply);
-  }
-
   if (candidates.size === 0) {
     return reply(
       "❌ No claimable roles found. Make sure your Booster Bot role is positioned between the top and bottom anchor roles.",
@@ -639,30 +626,14 @@ async function executeClaimBoosterRole(
     return _claimRole(guild, member, candidates.first(), reply);
   }
 
-  // Multiple candidates — ask user to pick
-  const list = candidates
-    .map((r) => `• **${r.name}** (\`${r.id}\`)`)
-    .join("\n");
+  // Multiple candidates — can't auto-pick, staff must intervene
+  const list = candidates.map((r) => `• **${r.name}**`).join("\n");
   return reply(
-    `⚠️ Multiple claimable roles found. Re-run with the role ID you want to claim:\n` +
-      `\`&claimBoosterRole <roleID>\`\n\n${list}`,
+    `⚠️ Multiple claimable roles found. Contact a staff member to claim the correct one:\n\n${list}`,
   );
 }
 
 async function _claimRole(guild, member, role, reply) {
-  // Fetch full member list for the role to get an accurate count
-  const membersWithRole = await guild.members
-    .fetch({ force: false })
-    .then((all) => all.filter((m) => m.roles.cache.has(role.id)))
-    .catch(() => null);
-
-  const memberCount = membersWithRole?.size ?? role.members?.size ?? 0;
-  if (memberCount > 1) {
-    return reply(
-      `⚠️ Booster role **${role.name}** found, but it has **${memberCount} members**. Contact a staff member to claim this role.`,
-    );
-  }
-
   try {
     await upsertEntry(guild.id, member.id, {
       roleId: role.id,

@@ -287,14 +287,6 @@ const crossCommands = [
     .setName("claimboosterrole")
     .setDescription(
       "🚀 Boosters only — Claim an existing role (e.g. from Booster Bot) into this system",
-    )
-    .addStringOption((o) =>
-      o
-        .setName("roleid")
-        .setDescription(
-          "Role ID to claim (optional if you only have one eligible role)",
-        )
-        .setRequired(false),
     ),
 ].map((c) => c.toJSON());
 
@@ -441,7 +433,6 @@ client.on("messageCreate", async (message) => {
         return executeDeleteBoosterRole(message.guild, message.member, replyFn);
       }
       if (command === "claimboosterrole") {
-        const specifiedRoleId = args[1]?.replace(/[<@&>]/g, "") ?? null;
         const guildCfg2 = getGuildConfig(message.guild.id);
         const configRoleIds = [
           ...(guildCfg2?.tier1Roles ?? []),
@@ -452,7 +443,6 @@ client.on("messageCreate", async (message) => {
           message.guild,
           message.member,
           {
-            specifiedRoleId,
             configRoleIds,
             bottomAnchorRoleId: guildCfg2?.bottomBoosterAnchorRoleId ?? null,
             ignoredBoosterRoles: guildCfg2?.ignoredBoosterRoles ?? [],
@@ -821,8 +811,6 @@ client.on("interactionCreate", async (interaction) => {
         return executeDeleteBoosterRole(guild, member, replyFn);
       }
       if (commandName === "claimboosterrole") {
-        const specifiedRoleId =
-          interaction.options.getString("roleid")?.trim() ?? null;
         const boosterGuildCfg2 = getGuildConfig(guild.id);
         const configRoleIds = [
           ...(boosterGuildCfg2?.tier1Roles ?? []),
@@ -833,7 +821,6 @@ client.on("interactionCreate", async (interaction) => {
           guild,
           member,
           {
-            specifiedRoleId,
             configRoleIds,
             bottomAnchorRoleId:
               boosterGuildCfg2?.bottomBoosterAnchorRoleId ?? null,
