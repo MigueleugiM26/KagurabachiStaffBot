@@ -288,6 +288,14 @@ const crossCommands = [
     .setName("claimboosterrole")
     .setDescription(
       "🚀 Boosters only — Claim an existing role (e.g. from Booster Bot) into this system",
+    )
+    .addStringOption((o) =>
+      o
+        .setName("roleid")
+        .setDescription(
+          "Role ID to claim (only needed if you have multiple claimable roles)",
+        )
+        .setRequired(false),
     ),
 
   new SlashCommandBuilder()
@@ -453,6 +461,7 @@ client.on("messageCreate", async (message) => {
           ...(guildCfg2?.tier2Roles ?? []),
           ...(guildCfg2?.tier3Roles ?? []),
         ];
+        const specifiedRoleId = args[1]?.replace(/[<@&>]/g, "") || null;
         return executeClaimBoosterRole(
           message.guild,
           message.member,
@@ -460,6 +469,7 @@ client.on("messageCreate", async (message) => {
             configRoleIds,
             bottomAnchorRoleId: guildCfg2?.bottomBoosterAnchorRoleId ?? null,
             ignoredBoosterRoles: guildCfg2?.ignoredBoosterRoles ?? [],
+            specifiedRoleId,
           },
           replyFn,
           guildCfg2?.boosterAnchorRoleId ?? null,
@@ -890,6 +900,9 @@ client.on("interactionCreate", async (interaction) => {
           ...(boosterGuildCfg2?.tier2Roles ?? []),
           ...(boosterGuildCfg2?.tier3Roles ?? []),
         ];
+        const specifiedRoleId =
+          interaction.options.getString("roleid")?.replace(/[<@&>]/g, "") ||
+          null;
         return executeClaimBoosterRole(
           guild,
           member,
@@ -898,6 +911,7 @@ client.on("interactionCreate", async (interaction) => {
             bottomAnchorRoleId:
               boosterGuildCfg2?.bottomBoosterAnchorRoleId ?? null,
             ignoredBoosterRoles: boosterGuildCfg2?.ignoredBoosterRoles ?? [],
+            specifiedRoleId,
           },
           replyFn,
           boosterGuildCfg2?.boosterAnchorRoleId ?? null,

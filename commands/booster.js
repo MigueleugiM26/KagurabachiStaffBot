@@ -39,14 +39,6 @@ async function getCollection() {
   return _db.collection("booster_roles");
 }
 
-// ── canvas is optional ────────────────────────────────────────────────────────
-let createCanvas;
-try {
-  ({ createCanvas } = require("canvas"));
-} catch {
-  /* icon gen disabled */
-}
-
 // ─── DATA LAYER ───────────────────────────────────────────────────────────────
 
 async function getEntry(guildId, userId) {
@@ -108,20 +100,28 @@ function normaliseHex(hex) {
   return hex ? `#${hex.replace(/^#/, "").toUpperCase()}` : null;
 }
 
-// Returns the `colors` array Discord expects for role.edit({ colors })
-// solid     → [c1]
-// gradient  → [c1, c2]
-// holographic → a fixed purple-to-teal gradient (no canvas needed)
+// Returns the RoleColors object discord.js expects for role.create/edit({ colors })
+// Holographic values are fixed by Discord's API — sending any tertiaryColor triggers
+// holographic mode with enforced values (primaryColor=11127295, secondaryColor=16759788, tertiaryColor=16761760)
+const HOLOGRAPHIC_COLORS = {
+  primaryColor: 11127295,
+  secondaryColor: 16759788,
+  tertiaryColor: 16761760,
+};
+
 function buildColors(type, color1, color2) {
-  if (type === "holographic") return [0xb44fe8, 0x4fe8c8];
+  if (type === "holographic") return HOLOGRAPHIC_COLORS;
   if (type === "gradient" && color2)
-    return [parseHex(color1) ?? 0x99aab5, parseHex(color2) ?? 0x99aab5];
-  return [parseHex(color1) ?? 0x99aab5];
+    return {
+      primaryColor: parseHex(color1) ?? 0x99aab5,
+      secondaryColor: parseHex(color2) ?? 0x99aab5,
+    };
+  return { primaryColor: parseHex(color1) ?? 0x99aab5 };
 }
 
 // Single colour for embed display
 function dominantColor(type, color1) {
-  if (type === "holographic") return 0xb44fe8;
+  if (type === "holographic") return HOLOGRAPHIC_COLORS.primaryColor;
   return parseHex(color1) ?? 0x99aab5;
 }
 
@@ -134,71 +134,6 @@ async function anchorPosition(guild, anchorRoleId) {
     return anchor ? anchor.position : 0;
   } catch {
     return 0;
-  }
-}
-
-// ─── ICON GENERATION (canvas) ────────────────────────────────────────────────
-
-function makeGradientIcon(hex1, hex2) {
-  if (!createCanvas) return null;
-  try {
-    const SIZE = 64;
-    const canvas = createCanvas(SIZE, SIZE);
-    const ctx = canvas.getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, SIZE, SIZE);
-    grad.addColorStop(0, normaliseHex(hex1));
-    grad.addColorStop(1, normaliseHex(hex2));
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2, 0, Math.PI * 2);
-    ctx.fill();
-    return canvas.toBuffer("image/png");
-  } catch {
-    return null;
-  }
-}
-
-function makeHolographicIcon() {
-  if (!createCanvas) return null;
-  try {
-    const SIZE = 64;
-    const canvas = createCanvas(SIZE, SIZE);
-    const ctx = canvas.getContext("2d");
-
-    const rainbow = ctx.createLinearGradient(0, 0, SIZE, SIZE);
-    [
-      [0.0, "#ff0080"],
-      [0.17, "#ff8c00"],
-      [0.33, "#ffe000"],
-      [0.5, "#00e676"],
-      [0.67, "#00b0ff"],
-      [0.83, "#7c4dff"],
-      [1.0, "#ff0080"],
-    ].forEach(([pos, c]) => rainbow.addColorStop(pos, c));
-    ctx.fillStyle = rainbow;
-    ctx.beginPath();
-    ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    const shimmer = ctx.createRadialGradient(
-      22,
-      20,
-      4,
-      SIZE / 2,
-      SIZE / 2,
-      SIZE / 2,
-    );
-    shimmer.addColorStop(0, "rgba(255,255,255,0.55)");
-    shimmer.addColorStop(0.5, "rgba(255,255,255,0.10)");
-    shimmer.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = shimmer;
-    ctx.beginPath();
-    ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    return canvas.toBuffer("image/png");
-  } catch {
-    return null;
   }
 }
 
@@ -248,6 +183,7 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
     role = await guild.roles.create({
       name: roleName,
       colors: buildColors(type, color1, color2),
+      permissions: 0n,
       hoist: false,
       mentionable: false,
       position: pos,
@@ -261,26 +197,18 @@ async function executeCreateBoosterRole(guild, member, opts, reply) {
   }
 
   let iconNote = "";
-  if (hasIcons) {
+  if (hasIcons && imageAttachment) {
     try {
-      if (imageAttachment) {
-        await role.setIcon(
-          imageAttachment.url,
-          `Booster icon for ${member.user.tag}`,
-        );
-      } else if (type === "gradient" && color1 && color2) {
-        const buf = makeGradientIcon(color1, color2);
-        if (buf) await role.setIcon(buf, "Booster gradient icon");
-      } else if (type === "holographic") {
-        const buf = makeHolographicIcon();
-        if (buf) await role.setIcon(buf, "Booster holographic icon");
-      }
+      await role.setIcon(
+        imageAttachment.url,
+        `Booster icon for ${member.user.tag}`,
+      );
     } catch (err) {
       console.warn("[createBoosterRole] icon error:", err.message);
       iconNote =
         "\n\u26a0\ufe0f Couldn't set the role icon (the image may be too large or an unsupported format).";
     }
-  } else if (imageAttachment || type !== "solid") {
+  } else if (imageAttachment && !hasIcons) {
     iconNote =
       "\n\u26a0\ufe0f This server doesn't have the **Role Icons** feature (requires Level 2 boost).";
   }
@@ -375,8 +303,6 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
     );
 
   const newColor = dominantColor(type, color1);
-  const hasIcons = guild.features.includes("ROLE_ICONS");
-  let iconNote = "";
 
   try {
     await role.edit({
@@ -386,25 +312,6 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
   } catch (err) {
     console.error("[editBoosterColor] setColor error:", err.message);
     return reply("\u274c Failed to update the role colour.");
-  }
-
-  if (hasIcons) {
-    try {
-      if (type === "gradient" && color1 && color2) {
-        const buf = makeGradientIcon(color1, color2);
-        if (buf) await role.setIcon(buf, "Booster gradient icon update");
-      } else if (type === "holographic") {
-        const buf = makeHolographicIcon();
-        if (buf) await role.setIcon(buf, "Booster holographic icon update");
-        // canvas not installed — holographic icon skipped, role color still updated
-      } else {
-        await role
-          .setIcon(null, "Booster solid colour — icon cleared")
-          .catch(() => {});
-      }
-    } catch (err) {
-      console.warn("[editBoosterColor] icon error:", err.message);
-    }
   }
 
   try {
@@ -417,14 +324,12 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
     });
   } catch (err) {
     console.error("[editBoosterColor] persist error:", err.message);
-    iconNote +=
-      "\n\u26a0\ufe0f Colour updated, but failed to save to database.";
   }
 
   const embed = new EmbedBuilder()
     .setColor(newColor)
     .setTitle("\ud83c\udfa8 Booster Role Updated")
-    .setDescription(`**${role.name}** has been updated.${iconNote}`)
+    .setDescription(`**${role.name}** has been updated.`)
     .addFields(
       { name: "Type", value: type, inline: true },
       ...(type !== "holographic" && color1
@@ -616,18 +521,6 @@ async function executeClaimBoosterRole(
       (bottomPos === null || r.position > bottomPos), // above bottom anchor
   );
 
-  // If user provided a specific role ID or mention, use that
-  const { specifiedRoleId } = opts;
-  if (specifiedRoleId) {
-    const role = candidates.get(specifiedRoleId);
-    if (!role) {
-      return reply(
-        "❌ That role wasn't found on your profile, or it doesn't qualify (wrong position, bot-managed, or excluded).",
-      );
-    }
-    return _claimRole(guild, member, role, reply);
-  }
-
   if (candidates.size === 0) {
     return reply(
       "❌ No claimable roles found. Make sure your Booster Bot role is positioned between the top and bottom anchor roles.",
@@ -638,13 +531,10 @@ async function executeClaimBoosterRole(
     return _claimRole(guild, member, candidates.first(), reply);
   }
 
-  // Multiple candidates — ask user to pick
-  const list = candidates
-    .map((r) => `• **${r.name}** (\`${r.id}\`)`)
-    .join("\n");
+  // Multiple candidates — can't auto-pick, staff must intervene
+  const list = candidates.map((r) => `• **${r.name}**`).join("\n");
   return reply(
-    `⚠️ Multiple claimable roles found. Re-run with the role ID you want to claim:\n` +
-      `\`&claimBoosterRole <roleID>\`\n\n${list}`,
+    `⚠️ Multiple claimable roles found. Contact a staff member to claim the correct one:\n\n${list}`,
   );
 }
 
