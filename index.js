@@ -47,6 +47,7 @@ const {
   executeDeleteBoosterRole,
   executeClaimBoosterRole,
 } = require("./commands/booster");
+const { executePurgeAll } = require("./commands/purge");
 
 // ─── CLIENT ───────────────────────────────────────────────────────────────────
 
@@ -288,6 +289,17 @@ const crossCommands = [
     .setDescription(
       "🚀 Boosters only — Claim an existing role (e.g. from Booster Bot) into this system",
     ),
+
+  new SlashCommandBuilder()
+    .setName("purgeall")
+    .setDescription("Tier 3 — Delete every message in an allowlisted channel")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+    .addChannelOption((o) =>
+      o
+        .setName("channel")
+        .setDescription("Channel to purge (defaults to the current channel)")
+        .setRequired(false),
+    ),
 ].map((c) => c.toJSON());
 
 // ─── MANGA SCHEDULER ──────────────────────────────────────────────────────────
@@ -373,6 +385,7 @@ client.on("messageCreate", async (message) => {
       "serverlist",
       "archive",
       "mangacheck",
+      "purgeall",
     ];
 
     // ── Booster commands — no userId, uses the message author ──────────────
@@ -515,6 +528,39 @@ client.on("messageCreate", async (message) => {
           );
         return message.reply({
           files: [{ attachment: target.url, name: target.name }],
+        });
+      }
+
+      // purgeall — no userId needed
+      if (command === "purgeall") {
+        const channelArg = args[1] ?? null;
+        // Resolve channel from mention (<#id>) or bare ID, defaulting to current channel
+        const channelId = channelArg
+          ? channelArg.replace(/[<#>]/g, "")
+          : message.channel.id;
+
+        let targetChannel;
+        try {
+          targetChannel = await message.guild.channels.fetch(channelId);
+        } catch {
+          return message.reply(`❌ Could not find channel \`${channelId}\`.`);
+        }
+        if (!targetChannel?.isTextBased()) {
+          return message.reply("❌ That channel is not a text channel.");
+        }
+
+        const allowedChannels = config.purgeChannels ?? [];
+        const progressMsg = await message.reply(
+          `🗑️ Starting purge of <#${targetChannel.id}>…`,
+        );
+        const editProgressFn = (content) => progressMsg.edit(content);
+
+        return executePurgeAll({
+          channel: targetChannel,
+          allowedChannels,
+          staffName: message.author.username,
+          staffId: message.author.id,
+          editProgressFn,
         });
       }
 
@@ -780,6 +826,7 @@ client.on("interactionCreate", async (interaction) => {
       "contact",
       "serverlist",
       "archive",
+      "purgeall",
     ];
 
     // ── Booster commands — handled before validCommands check to avoid double-deferReply ──
@@ -919,6 +966,30 @@ client.on("interactionCreate", async (interaction) => {
         );
       return interaction.editReply({
         files: [{ attachment: target.url, name: target.name }],
+      });
+    }
+
+    // purgeall — tier 3
+    if (commandName === "purgeall") {
+      await interaction.deferReply({ ephemeral: false });
+
+      const targetChannel =
+        interaction.options.getChannel("channel") ?? interaction.channel;
+
+      if (!targetChannel?.isTextBased()) {
+        return interaction.editReply("❌ That channel is not a text channel.");
+      }
+
+      const purgeConfig = getGuildConfig(guild.id);
+      const allowedChannels = purgeConfig?.purgeChannels ?? [];
+      const editProgressFn = (content) => interaction.editReply(content);
+
+      return executePurgeAll({
+        channel: targetChannel,
+        allowedChannels,
+        staffName: member.user.username,
+        staffId: member.user.id,
+        editProgressFn,
       });
     }
 

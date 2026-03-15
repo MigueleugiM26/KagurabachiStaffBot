@@ -33,6 +33,7 @@ function readGuildEntry(guildId) {
     bottomBoosterAnchorRoleId:
       process.env[`${prefix}BOTTOM_BOOSTER_ANCHOR_ROLE_ID`] ?? null,
     ignoredBoosterRoles: splitRoles(`${prefix}IGNORED_BOOSTER_ROLES`),
+    purgeChannels: splitRoles(`${prefix}PURGE_CHANNELS`),
   };
 }
 
@@ -59,6 +60,7 @@ function normalizeLegacyEntry(guildId, entry) {
     boosterAnchorRoleId: null,
     bottomBoosterAnchorRoleId: null,
     ignoredBoosterRoles: [],
+    purgeChannels: [],
   };
 }
 
@@ -96,6 +98,7 @@ function getAllGuildConfigs() {
       boosterAnchorRoleId: null,
       bottomBoosterAnchorRoleId: null,
       ignoredBoosterRoles: [],
+      purgeChannels: [],
     },
   ];
 }
@@ -132,6 +135,7 @@ const COMMAND_TIERS = {
   crossban: 3,
   crossunban: 3,
   archive: 1,
+  purgeall: 3,
   // booster commands (open tier — booster check is inside the handler)
   createboosterrole: 0,
   editboostercolor: 0,
@@ -253,6 +257,16 @@ const COMMAND_CATALOG = [
     description: "Download a custom emoji or sticker and post it as an image.",
     args: [
       "`input` — Paste a custom emoji (e.g. `<:name:id>`) or a bare sticker ID.",
+    ],
+  },
+  {
+    name: "purgeall",
+    tier: 3,
+    usage: "&purgeall [#channel]",
+    description: "Delete every message in an allowlisted channel.",
+    args: [
+      "`channel` *(optional)* — Channel mention or ID. Defaults to the current channel.",
+      "The target channel must be listed in `GUILD_<id>_PURGE_CHANNELS`.",
     ],
   },
   // ── Booster commands (tier 0 — open to all, but requires active boost) ──────
