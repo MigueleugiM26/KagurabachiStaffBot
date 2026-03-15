@@ -136,13 +136,13 @@ function applyTemplate(
 async function checkAndPost(client, guildConfig, messagesDir) {
   const {
     guildId,
-    mangadexId,
+    mangaplusId,
     mangaUpdatesChannel,
     mangaUpdatesRole,
     mangaName,
   } = guildConfig;
 
-  if (!mangadexId || !mangaUpdatesChannel || !mangaName) return null;
+  if (!mangaplusId || !mangaUpdatesChannel || !mangaName) return null;
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) {
@@ -165,7 +165,7 @@ async function checkAndPost(client, guildConfig, messagesDir) {
   // ── 1. Fetch latest chapter ──────────────────────────────────────────────
   let latest;
   try {
-    latest = await fetchLatestChapter(mangadexId);
+    latest = await fetchLatestChapter(mangaplusId);
     console.log(
       `[manga] Latest for ${mangaName} (guild ${guildId}): ` +
         `${latest.chapterName} → ${latest.chapterLink}`,
@@ -239,7 +239,7 @@ function initMangaSchedulers(client, configs, messagesDir) {
   const scheduledConfigs = [];
 
   for (const config of configs) {
-    if (!config.mangadexId || !config.mangaReleaseTime) continue;
+    if (!config.mangaplusId || !config.mangaReleaseTime) continue;
 
     let cronExpr, timezone;
     try {
@@ -287,7 +287,7 @@ function initMangaSchedulers(client, configs, messagesDir) {
       const config =
         scheduledConfigs.find((c) => c.guildId === guildId) ??
         configs.find((c) => c.guildId === guildId);
-      if (!config?.mangadexId) {
+      if (!config?.mangaplusId) {
         return Promise.reject(
           new Error("No manga configuration found for this server"),
         );

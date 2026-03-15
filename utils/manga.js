@@ -1,79 +1,109 @@
 "use strict";
 
-/**
- * Chapter fetcher — MangaDex API.
- *
- * MangaDex tracks all official MangaPlus releases and stores
- * the MangaPlus viewer URL directly in chapter.attributes.externalUrl,
- * so we get the real link without ever needing to auth with MangaPlus.
- *
- * API docs: https://api.mangadex.org/docs/
- * Requires:  npm install axios  (already a dependency)
- */
-
 const axios = require("axios");
+const protobuf = require("protobufjs");
 
-const MANGADEX_API = "https://api.mangadex.org";
-// Official MangaPlus scanlation group on MangaDex
-const MANGAPLUS_GROUP_ID = "4f1de6a2-f0c5-4ac5-bce5-02c7dbb67deb";
+const MANGAPLUS_API = "https://jumpg-webapi.tokyo-cdn.com/api";
 
-/**
- * Fetches the latest available official English chapter from MangaDex.
- *
- * @param {string} mangadexId  UUID for the manga on MangaDex
- * @returns {{ chapterName: string, chapterLink: string, chapterId: string }}
- */
-async function fetchLatestChapter(mangadexId) {
-  if (!mangadexId) throw new Error("No MangaDex manga ID provided");
+const PROTO_SCHEMA = `
+  syntax = "proto3";
 
-  // Fetch latest English chapters, sorted newest first.
-  // includesgroup lets us filter for MangaPlus official only.
-  const res = await axios.get(`${MANGADEX_API}/manga/${mangadexId}/feed`, {
+  message Chapter {
+    uint32 title_id         = 1;
+    uint32 chapter_id       = 2;
+    string chapter_number   = 3;
+    string chapter_title    = 4;
+    string thumbnail_url    = 5;
+    uint32 start_timestamp  = 6;
+    uint32 end_timestamp    = 7;
+  }
+
+  message ChapterGroup {
+    string            label    = 1;
+    repeated Chapter  ch_free  = 2;
+    repeated Chapter  ch_mid   = 3;
+    repeated Chapter  ch_last  = 4;
+  }
+
+  message Title {
+    uint32 title_id = 1;
+    string name     = 2;
+  }
+
+  message TitleDetailView {
+    Title                 title          = 1;
+    repeated ChapterGroup chapter_groups = 28;
+  }
+
+  message SuccessResult {
+    TitleDetailView title_detail_view = 8;
+  }
+
+  message Response {
+    SuccessResult success = 1;
+  }
+`;
+
+let _root = null;
+async function getProtoRoot() {
+  if (_root) return _root;
+  _root = protobuf.parse(PROTO_SCHEMA, { keepCase: true }).root;
+  return _root;
+}
+
+async function fetchLatestChapter(mangaplusId) {
+  if (!mangaplusId) throw new Error("No MangaPlus title ID provided");
+
+  const root = await getProtoRoot();
+  const Response = root.lookupType("Response");
+
+  const res = await axios.get(`${MANGAPLUS_API}/title_detailV3`, {
+    params: { title_id: mangaplusId, lang: "eng" },
+    responseType: "arraybuffer",
     timeout: 20_000,
-    params: {
-      "translatedLanguage[]": "en",
-      "order[chapter]": "desc",
-      limit: 10,
-      "includes[]": "scanlation_group",
-    },
     headers: {
-      "User-Agent": "KagurabachiStaffBot/1.0 (Discord bot; contact via server)",
+      "User-Agent": "Mozilla/5.0 (compatible; KagurabachiStaffBot/1.0)",
+      Referer: "https://mangaplus.shueisha.co.jp/",
+      Origin: "https://mangaplus.shueisha.co.jp",
+      "Secret-Key": "zMjaFxBCEGSHpFRMEXAiJA==",
     },
   });
 
-  const chapters = res.data?.data;
-  if (!Array.isArray(chapters) || chapters.length === 0) {
-    throw new Error("No chapters returned from MangaDex");
-  }
+  const decoded = Response.decode(new Uint8Array(res.data));
+  const groups = decoded?.success?.title_detail_view?.chapter_groups ?? [];
+  if (groups.length === 0)
+    throw new Error("No chapter groups in MangaPlus response");
 
-  // Prefer chapters from the official MangaPlus group that have an externalUrl
-  // (these are the simulpub releases with a direct MangaPlus viewer link).
-  // Fall back to any chapter with a MangaPlus externalUrl if needed.
-  const isOfficial = (ch) => {
-    const groups =
-      ch.relationships?.filter((r) => r.type === "scanlation_group") ?? [];
-    return groups.some((g) => g.id === MANGAPLUS_GROUP_ID);
-  };
+  // Collect all chapters across all groups and all sub-lists,
+  // then pick the one with the highest start_timestamp (= most recent release).
+  const allChapters = groups.flatMap((g) => [
+    ...(g.ch_free ?? []),
+    ...(g.ch_mid ?? []),
+    ...(g.ch_last ?? []),
+  ]);
 
-  let chapter =
-    chapters.find((ch) => isOfficial(ch) && ch.attributes?.externalUrl) ??
-    chapters.find((ch) => ch.attributes?.externalUrl?.includes("mangaplus")) ??
-    chapters.find((ch) => isOfficial(ch)) ??
-    chapters[0]; // last resort: just the newest chapter
+  if (allChapters.length === 0)
+    throw new Error("No chapters found in response");
 
-  const attrs = chapter.attributes;
-  const chNum = attrs.chapter ? `Chapter ${attrs.chapter}` : "Chapter ?";
-  const chTitle = attrs.title;
-  const chapterName = chTitle ? `${chNum}: ${chTitle}` : chNum;
+  const latest = allChapters.reduce((best, ch) =>
+    (ch.start_timestamp ?? 0) > (best.start_timestamp ?? 0) ? ch : best,
+  );
 
-  // Use the MangaPlus viewer URL if available, otherwise fall back to MangaDex reader
-  const chapterLink =
-    attrs.externalUrl ?? `https://mangadex.org/chapter/${chapter.id}`;
+  const chNum = latest.chapter_number
+    ? `Chapter ${latest.chapter_number.replace(/^#/, "")}`
+    : "Chapter ?";
+  const chTitle = latest.chapter_title;
+  const chapterName = chTitle
+    ? chTitle.includes(chNum)
+      ? chTitle
+      : `${chNum}: ${chTitle}`
+    : chNum;
+  const chapterLink = `https://mangaplus.shueisha.co.jp/viewer/${latest.chapter_id}`;
 
   return {
     chapterName,
     chapterLink,
-    chapterId: chapter.id,
+    chapterId: String(latest.chapter_id),
   };
 }
 

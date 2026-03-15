@@ -372,6 +372,7 @@ client.on("messageCreate", async (message) => {
       "contact",
       "serverlist",
       "archive",
+      "mangacheck",
     ];
 
     // ── Booster commands — no userId, uses the message author ──────────────
@@ -515,6 +516,31 @@ client.on("messageCreate", async (message) => {
         return message.reply({
           files: [{ attachment: target.url, name: target.name }],
         });
+      }
+
+      if (command === "mangacheck") {
+        if (!mangaScheduler)
+          return message.reply(
+            "⏳ Bot is still initializing, try again in a moment.",
+          );
+        const progress = await message.reply(
+          "🔍 Checking for a new chapter...",
+        );
+        try {
+          const result = await mangaScheduler.manualCheck(message.guild.id);
+          if (result) {
+            await progress.edit(
+              `✅ Posted: **${result.chapterName}**\n${result.chapterLink}`,
+            );
+          } else {
+            await progress.edit(
+              "ℹ️ No new chapter found — either it's a break week, it was already posted, or manga updates aren't configured for this server.",
+            );
+          }
+        } catch (err) {
+          await progress.edit(`❌ Error: ${err.message}`);
+        }
+        return;
       }
 
       const userId = (args[1] ?? "").replace(/[<@!>]/g, "");
@@ -904,6 +930,26 @@ client.on("interactionCreate", async (interaction) => {
         ...buildHelpPayload(target, config, guild),
         ephemeral: false,
       });
+    } else if (commandName === "mangacheck") {
+      await interaction.deferReply();
+      if (!mangaScheduler)
+        return interaction.editReply(
+          "⏳ Bot is still initializing, try again in a moment.",
+        );
+      try {
+        const result = await mangaScheduler.manualCheck(guild.id);
+        if (result) {
+          await interaction.editReply(
+            `✅ Posted: **${result.chapterName}**\n${result.chapterLink}`,
+          );
+        } else {
+          await interaction.editReply(
+            "ℹ️ No new chapter found — either it's a break week, it was already posted, or manga updates aren't configured for this server.",
+          );
+        }
+      } catch (err) {
+        await interaction.editReply(`❌ Error: ${err.message}`);
+      }
     }
 
     await interaction.deferReply();
@@ -975,25 +1021,6 @@ client.on("interactionCreate", async (interaction) => {
         sourceGuild,
         replyTarget: interaction,
       });
-    } else if (commandName === "mangacheck") {
-      if (!mangaScheduler)
-        return interaction.editReply(
-          "⏳ Bot is still initializing, try again in a moment.",
-        );
-      try {
-        const result = await mangaScheduler.manualCheck(guild.id);
-        if (result) {
-          await interaction.editReply(
-            `✅ Posted: **${result.chapterName}**\n${result.chapterLink}`,
-          );
-        } else {
-          await interaction.editReply(
-            "ℹ️ No new chapter found — either it's a break week, it was already posted, or manga updates aren't configured for this server.",
-          );
-        }
-      } catch (err) {
-        await interaction.editReply(`❌ Error: ${err.message}`);
-      }
     } else if (commandName === "reports") {
       const full = interaction.options.getBoolean("full") ?? true;
       await executeReports(client, {
