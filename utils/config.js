@@ -34,6 +34,7 @@ function readGuildEntry(guildId) {
       process.env[`${prefix}BOTTOM_BOOSTER_ANCHOR_ROLE_ID`] ?? null,
     ignoredBoosterRoles: splitRoles(`${prefix}IGNORED_BOOSTER_ROLES`),
     purgeChannels: splitRoles(`${prefix}PURGE_CHANNELS`),
+    restrictedChannels: splitRoles(`${prefix}RESTRICTED_CHANNEL_ID`),
   };
 }
 
@@ -61,6 +62,7 @@ function normalizeLegacyEntry(guildId, entry) {
     bottomBoosterAnchorRoleId: null,
     ignoredBoosterRoles: [],
     purgeChannels: [],
+    restrictedChannels: [],
   };
 }
 
@@ -99,6 +101,7 @@ function getAllGuildConfigs() {
       bottomBoosterAnchorRoleId: null,
       ignoredBoosterRoles: [],
       purgeChannels: [],
+      restrictedChannels: [],
     },
   ];
 }

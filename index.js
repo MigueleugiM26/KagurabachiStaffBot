@@ -366,6 +366,72 @@ client.once("ready", async () => {
   }
 });
 
+// ─── RESTRICTED CHANNEL HELPER ───────────────────────────────────────────────
+// Returns true if the message was deleted (caller should stop processing it).
+// Handles both regular messages and GIF-picker messages, which arrive with no
+// content/attachments and only gain their embed on the first messageUpdate.
+
+const URL_REGEX = /https?:\/\/\S+|discord\.gg\/\S+/i;
+
+async function enforceRestrictedChannel(message, config) {
+  if (!config.restrictedChannels?.length) return false;
+  if (!config.restrictedChannels.includes(message.channel.id)) return false;
+
+  const isStaff = hasTierAccess(message.member, config, "crosscheck"); // tier 1+
+  if (isStaff) return false;
+
+  const hasLink = URL_REGEX.test(message.content);
+  const hasMedia = message.attachments.size > 0;
+  // GIFs from Discord's GIF picker arrive as embeds (type "gifv") or video embeds
+  const hasEmbed = message.embeds.some(
+    (e) => e.data?.type === "gifv" || e.video || e.image,
+  );
+
+  console.log(
+    `[restricted] ${message.author.username} (${message.author.id}) in #${message.channel.id} | link=${hasLink} media=${hasMedia} embed=${hasEmbed}`,
+  );
+
+  if (!hasLink && !hasMedia && !hasEmbed) return false;
+
+  try {
+    await message.delete();
+  } catch (err) {
+    console.error(
+      `[restricted] Failed to delete message ${message.id}:`,
+      err.message,
+    );
+    return false;
+  }
+
+  const warning = await message.channel.send(
+    `⛔ <@${message.author.id}> — links and media are not allowed in this channel.`,
+  );
+  setTimeout(() => warning.delete().catch(() => {}), 6000);
+  return true;
+}
+
+// messageUpdate catches GIF-picker gifs: they arrive empty on messageCreate,
+// then Discord populates the embed on the very first update.
+client.on("messageUpdate", async (oldMessage, newMessage) => {
+  // Only act on the first embed population (old had none, new has some)
+  if (oldMessage.embeds?.length > 0) return;
+  if (!newMessage.embeds?.length) return;
+  if (!newMessage.guild || newMessage.author?.bot) return;
+
+  const config = getGuildConfig(newMessage.guild.id);
+  if (!config) return;
+
+  // Fetch full message so member is populated
+  let fullMessage;
+  try {
+    fullMessage = await newMessage.fetch();
+  } catch {
+    return;
+  }
+
+  await enforceRestrictedChannel(fullMessage, config);
+});
+
 // ─── MESSAGE LISTENER ─────────────────────────────────────────────────────────
 
 client.on("messageCreate", async (message) => {
@@ -375,6 +441,9 @@ client.on("messageCreate", async (message) => {
   if (!config) return;
 
   const content = message.content;
+
+  // ── Restricted-channel guard ──────────────────────────────────────────────
+  if (await enforceRestrictedChannel(message, config)) return;
 
   // ── Cross / bot commands ──
   if (content.startsWith(CROSS_PREFIX)) {
