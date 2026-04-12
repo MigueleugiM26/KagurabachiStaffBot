@@ -1,86 +1,85 @@
 "use strict";
 
-/**
- * Manga update scheduler.
- *
- * For every guild that has MANGAPLUS_PAGE + MANGA_RELEASE_TIME configured,
- * this module sets up a cron job that:
- *   1. Fetches the latest chapter from MangaPlus
- *   2. Checks whether it was already announced in the channel (break-week guard)
- *   3. Posts the configured message template if it's genuinely new
- *
- * Template files live in:  messages/{guildId}_{MangaName}.txt
- * Placeholders:  {role}  {mangaName}  {chapterName}  {chapterLink}
- *
- * Requires:  npm install node-cron
- */
-
 const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
+const { PermissionsBitField } = require("discord.js");
 const { fetchLatestChapter } = require("./manga");
+const { executePurgeAll } = require("../commands/purge");
 
 // ─── ERROR REPORTING ──────────────────────────────────────────────────────────
 
-/**
- * Sends an @here alert to the guild's ERRORS_CHANNEL_ID.
- * Fails silently so error reporting never causes a second crash.
- */
 async function postError(client, guildConfig, message) {
   const { guildId, errorsChannelId } = guildConfig;
   if (!errorsChannelId) return;
-
   try {
     const guild = client.guilds.cache.get(guildId);
     if (!guild) return;
-
-    const channel = await guild.channels
-      .fetch(errorsChannelId)
-      .catch(() => null);
+    const channel = await guild.channels.fetch(errorsChannelId).catch(() => null);
     if (!channel) return;
-
     await channel.send(`@here ⚠️ **Manga scheduler error** — ${message}`);
   } catch (err) {
-    console.error(
-      `[manga] Failed to post error to errors channel: ${err.message}`,
-    );
+    console.error(`[manga] Failed to post error to errors channel: ${err.message}`);
   }
 }
 
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
-
-const DAY_MAP = {
-  sunday: 0,
-  monday: 1,
-  tuesday: 2,
-  wednesday: 3,
-  thursday: 4,
-  friday: 5,
-  saturday: 6,
-};
+// ─── CHANNEL LOCK / UNLOCK ────────────────────────────────────────────────────
 
 /**
- * Parses a human-friendly release time string into a node-cron expression.
- *
- * Accepted format:  "DayName HH:MM IANA/Timezone"
- * Examples:
- *   "Sunday 12:00 America/Sao_Paulo"
- *   "Wednesday 00:00 Asia/Tokyo"
- *   "Sunday 15:00 UTC"
+ * Sets or clears the SendMessages permission for @everyone on a channel.
+ * allow = true  → unlock (explicitly allow)
+ * allow = false → lock   (explicitly deny)
  */
-function parseMangaReleaseTime(str) {
-  const parts = str.trim().split(/\s+/);
-  if (parts.length < 2) {
-    throw new Error(`Expected "Day HH:MM [Timezone]", got: "${str}"`);
+async function setRawsChannelOpen(channel, allow) {
+  const everyone = channel.guild.roles.everyone;
+  await channel.permissionOverwrites.edit(everyone, {
+    SendMessages: allow,
+  });
+  console.log(
+    `[manga] ${allow ? "🔓 Unlocked" : "🔒 Locked"} raws channel ` +
+      `#${channel.name} (${channel.id}) in guild ${channel.guild.id}`,
+  );
+}
+
+/**
+ * Fetches the raws channel for a guild config.
+ * Returns null (with a warning) if not configured or not found.
+ */
+async function getRawsChannel(client, guildConfig) {
+  const { guildId, rawsChannel } = guildConfig;
+  if (!rawsChannel) return null;
+
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) {
+    console.warn(`[manga] Guild ${guildId} not in cache`);
+    return null;
   }
 
-  const [dayStr, timeStr, ...tzParts] = parts;
+  const channel = await guild.channels.fetch(rawsChannel).catch(() => null);
+  if (!channel) {
+    console.warn(`[manga] Raws channel ${rawsChannel} not found in guild ${guildId}`);
+    return null;
+  }
 
+  return channel;
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+const DAY_MAP = {
+  sunday: 0, monday: 1, tuesday: 2, wednesday: 3,
+  thursday: 4, friday: 5, saturday: 6,
+};
+
+function parseMangaReleaseTime(str) {
+  const parts = str.trim().split(/\s+/);
+  if (parts.length < 2) throw new Error(`Expected "Day HH:MM [Timezone]", got: "${str}"`);
+
+  const [dayStr, timeStr, ...tzParts] = parts;
   const dayNum = DAY_MAP[dayStr.toLowerCase()];
   if (dayNum === undefined) throw new Error(`Unknown day: "${dayStr}"`);
 
   const [hourStr, minuteStr = "0", secondStr = "0"] = timeStr.split(":");
-
   const hour = parseInt(hourStr, 10);
   const minute = parseInt(minuteStr, 10);
   const second = parseInt(secondStr, 10);
@@ -91,33 +90,19 @@ function parseMangaReleaseTime(str) {
 
   const timezone = tzParts.join(" ") || "UTC";
   const cronExpr = `${second} ${minute} ${hour} * * ${dayNum}`;
-
   return { cronExpr, timezone };
 }
 
-/**
- * Loads the message template for a guild.
- * Falls back to a sensible default if no file exists.
- */
 function loadTemplate(messagesDir, guildId, mangaName) {
   const filePath = path.join(messagesDir, `${guildId}_${mangaName}.txt`);
-  if (fs.existsSync(filePath)) {
-    return fs.readFileSync(filePath, "utf8").trim();
-  }
-  // Default template — good enough until a custom file is created
+  if (fs.existsSync(filePath)) return fs.readFileSync(filePath, "utf8").trim();
   return (
     `{role} **{mangaName}** ({chapterName}) is out now on MangaPlus!\n` +
     `{chapterLink}`
   );
 }
 
-/**
- * Replaces all recognised placeholders in a template string.
- */
-function applyTemplate(
-  template,
-  { role, mangaName, chapterName, chapterLink },
-) {
+function applyTemplate(template, { role, mangaName, chapterName, chapterLink }) {
   return template
     .replace(/\{role\}/g, role ?? "")
     .replace(/\{mangaName\}/g, mangaName ?? "")
@@ -127,38 +112,19 @@ function applyTemplate(
 
 // ─── CORE LOGIC ───────────────────────────────────────────────────────────────
 
-/**
- * Checks MangaPlus and posts to Discord if a new chapter is available.
- * Safe to call manually (e.g., via /mangacheck).
- *
- * @returns {object|null}  The chapter data if a new post was made, null otherwise.
- */
 async function checkAndPost(client, guildConfig, messagesDir) {
-  const {
-    guildId,
-    mangaplusId,
-    mangaUpdatesChannel,
-    mangaUpdatesRole,
-    mangaName,
-  } = guildConfig;
-
+  const { guildId, mangaplusId, mangaUpdatesChannel, mangaUpdatesRole, mangaName } = guildConfig;
   if (!mangaplusId || !mangaUpdatesChannel || !mangaName) return null;
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) {
-    console.warn(
-      `[manga] Guild ${guildId} not in cache — is the bot in this server?`,
-    );
+    console.warn(`[manga] Guild ${guildId} not in cache`);
     return null;
   }
 
-  const channel = await guild.channels
-    .fetch(mangaUpdatesChannel)
-    .catch(() => null);
+  const channel = await guild.channels.fetch(mangaUpdatesChannel).catch(() => null);
   if (!channel) {
-    console.warn(
-      `[manga] Channel ${mangaUpdatesChannel} not found in guild ${guildId}`,
-    );
+    console.warn(`[manga] Channel ${mangaUpdatesChannel} not found in guild ${guildId}`);
     return null;
   }
 
@@ -177,15 +143,11 @@ async function checkAndPost(client, guildConfig, messagesDir) {
     return null;
   }
 
-  // ── 2. Break-week guard ───────────────────────────────────────────────────
-  // Look for the chapter link in the last 50 bot messages in this channel.
-  // If found, the chapter was already announced → skip.
+  // ── 2. Break-week guard ──────────────────────────────────────────────────
   const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
   if (recent) {
     const alreadyPosted = recent.some(
-      (m) =>
-        m.author.id === client.user.id &&
-        m.content.includes(latest.chapterLink),
+      (m) => m.author.id === client.user.id && m.content.includes(latest.chapterLink),
     );
     if (alreadyPosted) {
       console.log(
@@ -196,7 +158,7 @@ async function checkAndPost(client, guildConfig, messagesDir) {
     }
   }
 
-  // ── 3. Build message from template ───────────────────────────────────────
+  // ── 3. Post manga update ─────────────────────────────────────────────────
   const template = loadTemplate(messagesDir, guildId, mangaName);
   const roleMention = mangaUpdatesRole ? `<@&${mangaUpdatesRole}>` : "";
   const message = applyTemplate(template, {
@@ -206,31 +168,49 @@ async function checkAndPost(client, guildConfig, messagesDir) {
     chapterLink: latest.chapterLink,
   });
 
-  // ── 4. Post ───────────────────────────────────────────────────────────────
   await channel
     .send(message)
-    .catch((err) =>
-      console.error(`[manga] Send failed in guild ${guildId}: ${err.message}`),
-    );
+    .catch((err) => console.error(`[manga] Send failed in guild ${guildId}: ${err.message}`));
 
-  console.log(
-    `[manga] ✅ Posted ${mangaName} "${latest.chapterName}" in guild ${guildId}`,
-  );
+  console.log(`[manga] ✅ Posted ${mangaName} "${latest.chapterName}" in guild ${guildId}`);
+
+  // ── 4. Lock + purge the raws channel ────────────────────────────────────
+  if (guildConfig.rawsChannel) {
+    const rawsCh = await getRawsChannel(client, guildConfig);
+    if (rawsCh) {
+      try {
+        await setRawsChannelOpen(rawsCh, false); // lock first
+      } catch (err) {
+        const msg = `Failed to lock raws channel: ${err.message}`;
+        console.error(`[manga] ${msg} (guild ${guildId})`);
+        await postError(client, guildConfig, msg);
+      }
+
+      try {
+        await executePurgeAll({
+          channel: rawsCh,
+          allowedChannels: guildConfig.purgeChannels,
+          staffName: "Manga Scheduler",
+          staffId: client.user.id,
+          editProgressFn: (msg) => {
+            console.log(`[manga/purge] ${msg.replace(/[*_`<>]/g, "")}`);
+            return Promise.resolve();
+          },
+        });
+      } catch (err) {
+        const msg = `Failed to purge raws channel: ${err.message}`;
+        console.error(`[manga] ${msg} (guild ${guildId})`);
+        await postError(client, guildConfig, msg);
+      }
+    }
+  }
+
   return latest;
 }
 
 // ─── SCHEDULER INIT ───────────────────────────────────────────────────────────
 
-/**
- * Reads all guild configs, sets up cron jobs for those with manga settings,
- * and returns a { manualCheck } helper for slash command use.
- *
- * @param {Client}   client       - discord.js client (must be ready)
- * @param {object[]} configs      - array from getAllGuildConfigs()
- * @param {string}   messagesDir  - absolute path to the messages/ directory
- */
 function initMangaSchedulers(client, configs, messagesDir) {
-  // Ensure messages directory exists so template files have a home
   if (!fs.existsSync(messagesDir)) {
     fs.mkdirSync(messagesDir, { recursive: true });
     console.log(`[manga] Created messages directory at ${messagesDir}`);
@@ -241,21 +221,17 @@ function initMangaSchedulers(client, configs, messagesDir) {
   for (const config of configs) {
     if (!config.mangaplusId || !config.mangaReleaseTime) continue;
 
+    // ── Manga release cron (post + lock + purge raws) ──────────────────────
     let cronExpr, timezone;
     try {
       ({ cronExpr, timezone } = parseMangaReleaseTime(config.mangaReleaseTime));
     } catch (err) {
-      console.error(
-        `[manga] Bad MANGA_RELEASE_TIME for guild ${config.guildId}: ${err.message}`,
-      );
+      console.error(`[manga] Bad MANGA_RELEASE_TIME for guild ${config.guildId}: ${err.message}`);
       continue;
     }
 
     if (!cron.validate(cronExpr)) {
-      console.error(
-        `[manga] Computed cron expression "${cronExpr}" is invalid ` +
-          `for guild ${config.guildId}`,
-      );
+      console.error(`[manga] Computed cron "${cronExpr}" is invalid for guild ${config.guildId}`);
       continue;
     }
 
@@ -272,25 +248,58 @@ function initMangaSchedulers(client, configs, messagesDir) {
     );
 
     console.log(
-      `[manga] 📅 Scheduled ${config.mangaName} for guild ${config.guildId}: ` +
+      `[manga] 📅 Scheduled ${config.mangaName} release for guild ${config.guildId}: ` +
         `${cronExpr} (${timezone})`,
     );
+
+    // ── Raws open cron (unlock) ────────────────────────────────────────────
+    if (config.rawsChannel && config.rawsOpenTime) {
+      let openCron, openTz;
+      try {
+        ({ cronExpr: openCron, timezone: openTz } = parseMangaReleaseTime(config.rawsOpenTime));
+      } catch (err) {
+        console.error(`[manga] Bad RAWS_OPEN_TIME for guild ${config.guildId}: ${err.message}`);
+        // Still push to scheduledConfigs so manualCheck works
+        scheduledConfigs.push(config);
+        continue;
+      }
+
+      if (!cron.validate(openCron)) {
+        console.error(`[manga] Computed cron "${openCron}" is invalid for guild ${config.guildId}`);
+        scheduledConfigs.push(config);
+        continue;
+      }
+
+      cron.schedule(
+        openCron,
+        () => {
+          getRawsChannel(client, config)
+            .then((ch) => ch && setRawsChannelOpen(ch, true))
+            .catch((err) => {
+              const msg = `Failed to unlock raws channel: ${err.message}`;
+              console.error(`[manga] ${msg} (guild ${config.guildId})`);
+              postError(client, config, msg).catch(console.error);
+            });
+        },
+        { scheduled: true, timezone: openTz },
+      );
+
+      console.log(
+        `[manga] 🔓 Scheduled raws unlock for guild ${config.guildId}: ` +
+          `${openCron} (${openTz})`,
+      );
+    }
+
     scheduledConfigs.push(config);
   }
 
   return {
-    /**
-     * Manually trigger a chapter check for a specific guild.
-     * Used by the /mangacheck slash command.
-     */
     manualCheck(guildId) {
       const config =
         scheduledConfigs.find((c) => c.guildId === guildId) ??
         configs.find((c) => c.guildId === guildId);
       if (!config?.mangaplusId) {
-        return Promise.reject(
-          new Error("No manga configuration found for this server"),
-        );
+        return Promise.reject(new Error("No manga configuration found for this server"));
       }
       return checkAndPost(client, config, messagesDir);
     },
