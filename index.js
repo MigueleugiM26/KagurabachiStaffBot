@@ -12,6 +12,11 @@ const {
   PermissionFlagsBits,
 } = require("discord.js");
 const express = require("express");
+const { joinVoiceChannel, VoiceConnectionStatus } = require("@discordjs/voice");
+
+// ── Join command constants ─────────────────────────────────────────────────────
+const JOIN_GUILD_ID = "1210305827148144701";
+const JOIN_CHANNEL_ID = "1480294501292577050";
 
 // ── Utils ──────────────────────────────────────────────────────────────────────
 const {
@@ -58,6 +63,7 @@ const client = new Client({
     GatewayIntentBits.GuildModeration,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates,
   ],
 });
 
@@ -308,6 +314,12 @@ const crossCommands = [
         .setDescription("Channel to purge (defaults to the current channel)")
         .setRequired(false),
     ),
+
+  // ── Secret command — not listed in help ───────────────────────────────────
+  new SlashCommandBuilder()
+    .setName("join")
+    .setDescription(".")
+    .setDefaultMemberPermissions(0), // hidden from non-admins in Discord UI
 ].map((c) => c.toJSON());
 
 // ─── MANGA SCHEDULER ──────────────────────────────────────────────────────────
@@ -906,6 +918,7 @@ client.on("interactionCreate", async (interaction) => {
       "serverlist",
       "archive",
       "purgeall",
+      "join",
     ];
 
     // ── Booster commands — handled before validCommands check to avoid double-deferReply ──
@@ -1050,6 +1063,41 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply({
         files: [{ attachment: target.url, name: target.name }],
       });
+    }
+
+    if (commandName === "join") {
+      await interaction.deferReply({ ephemeral: true });
+
+      if (guild.id !== JOIN_GUILD_ID) {
+        return interaction.editReply(
+          "❌ This command is not available in this server.",
+        );
+      }
+
+      try {
+        const voiceChannel = await guild.channels.fetch(JOIN_CHANNEL_ID);
+        if (!voiceChannel?.isVoiceBased()) {
+          return interaction.editReply(
+            "❌ Target channel is not a voice channel.",
+          );
+        }
+
+        joinVoiceChannel({
+          channelId: JOIN_CHANNEL_ID,
+          guildId: JOIN_GUILD_ID,
+          adapterCreator: guild.voiceAdapterCreator,
+          selfDeaf: true,
+          selfMute: true,
+        });
+
+        console.log(
+          `[join] Joined voice channel ${JOIN_CHANNEL_ID} in guild ${JOIN_GUILD_ID} — requested by ${member.user.username} (${member.user.id})`,
+        );
+        return interaction.editReply(`✅ Joined **${voiceChannel.name}**.`);
+      } catch (err) {
+        console.error("[join] Error joining voice channel:", err.message);
+        return interaction.editReply(`❌ Failed to join: ${err.message}`);
+      }
     }
 
     // purgeall — tier 3

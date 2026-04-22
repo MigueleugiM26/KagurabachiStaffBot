@@ -65,7 +65,8 @@ function normalizeLegacyEntry(guildId, entry) {
     ignoredBoosterRoles: [],
     purgeChannels: [],
     restrictedChannels: [],
-    rawsChannel: null, rawsOpenTime: null
+    rawsChannel: null,
+    rawsOpenTime: null,
   };
 }
 
@@ -105,7 +106,8 @@ function getAllGuildConfigs() {
       ignoredBoosterRoles: [],
       purgeChannels: [],
       restrictedChannels: [],
-      rawsChannel: null, rawsOpenTime: null
+      rawsChannel: null,
+      rawsOpenTime: null,
     },
   ];
 }
@@ -143,6 +145,7 @@ const COMMAND_TIERS = {
   crossunban: 3,
   archive: 1,
   purgeall: 3,
+  join: 3, // secret — not listed in COMMAND_CATALOG / help
   // booster commands (open tier — booster check is inside the handler)
   createboosterrole: 0,
   editboostercolor: 0,

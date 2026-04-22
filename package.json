@@ -8,6 +8,7 @@
     "dev": "node --watch index.js"
   },
   "dependencies": {
+    "@discordjs/voice": "^0.19.2",
     "axios": "^1.13.6",
     "canvas": "^3.2.1",
     "discord.js": "^14.15.0",
