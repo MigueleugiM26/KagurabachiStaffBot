@@ -85,6 +85,18 @@ const crossActionInProgress = new Set();
 // ─── SLASH COMMAND DEFINITIONS ────────────────────────────────────────────────
 
 const crossCommands = [
+  /*
+  new SlashCommandBuilder()
+    .setName("testlock")
+    .setDescription("[TEMP] Send s!lock and purge the current channel (tier 3)")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+
+  new SlashCommandBuilder()
+    .setName("testunlock")
+    .setDescription("[TEMP] Unlock the current channel (tier 3)")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+  */
+
   new SlashCommandBuilder()
     .setName("crossmute")
     .setDescription("Mute a user in ALL servers the bot is in")
@@ -664,6 +676,16 @@ client.on("messageCreate", async (message) => {
         });
       }
 
+      /*
+      if (commandName === "testlock") {
+        return handleTestLock(interaction, guild, member);
+      }
+
+      if (commandName === "testunlock") {
+        return handleTestUnlock(interaction, guild, member);
+      }
+      */
+
       if (command === "mangacheck") {
         if (!mangaScheduler)
           return message.reply(
@@ -992,6 +1014,144 @@ function startVoicePresence(guild) {
   connect();
 }
 
+// ─── LOCK/UNLOCK EMBED ───────────────────────────────────────────────────────
+
+function buildLockEmbed(channel, isLocked, executor) {
+  return new EmbedBuilder()
+    .setColor(isLocked ? Colors.Red : Colors.Green)
+    .setTitle(isLocked ? "🔒 Channel locked" : "🔓 Channel unlocked")
+    .setDescription(
+      isLocked
+        ? `<#${channel.id}> has been locked.`
+        : `<#${channel.id}> has been unlocked.`,
+    )
+    .addFields({ name: "Moderator", value: `<@${executor.id}>`, inline: true })
+    .setTimestamp();
+}
+
+// ─── TESTLOCK HELPER ─────────────────────────────────────────────────────────
+/*
+async function handleTestLock(interaction, guild, member) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetChannel = interaction.channel;
+  if (!targetChannel?.isTextBased()) {
+    return interaction.editReply("❌ This channel is not a text channel.");
+  }
+
+  const guildCfg = getGuildConfig(guild.id);
+  const ignoredRoles = guildCfg?.rawsIgnoredRoles ?? [];
+
+  // Lock: deny SendMessages for every overwrite, skipping ignored roles and
+  // members who have an ignored role
+  try {
+    await guild.members.fetch();
+
+    for (const ow of targetChannel.permissionOverwrites.cache.values()) {
+      if (ow.type === 0) {
+        if (ignoredRoles.includes(ow.id)) continue;
+      } else {
+        const m = guild.members.cache.get(ow.id);
+        if (m && ignoredRoles.some((r) => m.roles.cache.has(r))) continue;
+      }
+      await ow.edit({ SendMessages: false });
+    }
+
+    // Always deny @everyone explicitly
+    if (!ignoredRoles.includes(guild.roles.everyone.id)) {
+      await targetChannel.permissionOverwrites.edit(guild.roles.everyone, {
+        SendMessages: false,
+      });
+    }
+
+    console.log(
+      `[testlock] Locked #${targetChannel.name} (${targetChannel.id}) ` +
+        `in guild ${guild.id} — requested by ${member.user.username}`,
+    );
+  } catch (err) {
+    console.error(`[testlock] Failed to lock channel: ${err.message}`);
+    return interaction.editReply(`⚠️ Failed to lock channel: ${err.message}`);
+  }
+
+  // Purge
+  try {
+    await executePurgeAll({
+      channel: targetChannel,
+      allowedChannels: guildCfg?.purgeChannels ?? [],
+      staffName: member.user.username,
+      staffId: member.user.id,
+      editProgressFn: (msg) => {
+        console.log(`[testlock/purge] ${msg.replace(/[*_`<>]/g, "")}`);
+        return Promise.resolve();
+      },
+    });
+    try {
+      await targetChannel.send({
+        embeds: [buildLockEmbed(targetChannel, true, member.user)],
+      });
+    } catch {
+      // non-fatal 
+    }
+    return interaction.editReply("✅ Locked channel and purged messages.");
+  } catch (err) {
+    console.error(`[testlock] Purge failed: ${err.message}`);
+    return interaction.editReply(
+      `⚠️ Channel locked, but purge failed: ${err.message}`,
+    );
+  }
+}
+
+async function handleTestUnlock(interaction, guild, member) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetChannel = interaction.channel;
+  if (!targetChannel?.isTextBased()) {
+    return interaction.editReply("❌ This channel is not a text channel.");
+  }
+
+  const guildCfg = getGuildConfig(guild.id);
+  const ignoredRoles = guildCfg?.rawsIgnoredRoles ?? [];
+
+  try {
+    await guild.members.fetch();
+
+    for (const ow of targetChannel.permissionOverwrites.cache.values()) {
+      if (ow.type === 0) {
+        if (ignoredRoles.includes(ow.id)) continue;
+      } else {
+        const m = guild.members.cache.get(ow.id);
+        if (m && ignoredRoles.some((r) => m.roles.cache.has(r))) continue;
+      }
+      await ow.edit({ SendMessages: true });
+    }
+
+    if (!ignoredRoles.includes(guild.roles.everyone.id)) {
+      await targetChannel.permissionOverwrites.edit(guild.roles.everyone, {
+        SendMessages: true,
+      });
+    }
+
+    console.log(
+      `[testunlock] Unlocked #${targetChannel.name} (${targetChannel.id}) ` +
+        `in guild ${guild.id} — requested by ${member.user.username}`,
+    );
+  } catch (err) {
+    console.error(`[testunlock] Failed to unlock channel: ${err.message}`);
+    return interaction.editReply(`⚠️ Failed to unlock channel: ${err.message}`);
+  }
+
+  try {
+    await targetChannel.send({
+      embeds: [buildLockEmbed(targetChannel, false, member.user)],
+    });
+  } catch {
+    // non-fatal
+  }
+
+  return interaction.editReply("✅ Channel unlocked.");
+}
+*/
+
 // ─── SLASH COMMAND HANDLER ────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
@@ -1019,6 +1179,10 @@ client.on("interactionCreate", async (interaction) => {
       "archive",
       "purgeall",
       "join",
+      /*
+      "testlock",
+      "testunlock",
+      */
     ];
 
     // ── Booster commands — handled before validCommands check to avoid double-deferReply ──
@@ -1247,6 +1411,17 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.editReply(`❌ Error: ${err.message}`);
       }
     }
+
+    // testlock — tier 3 (temporary)
+    /*
+    if (commandName === "testlock") {
+      return handleTestLock(interaction, guild, member);
+    }
+
+    if (commandName === "testunlock") {
+      return handleTestUnlock(interaction, guild, member);
+    }
+    */
 
     await interaction.deferReply();
 

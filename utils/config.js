@@ -37,6 +37,8 @@ function readGuildEntry(guildId) {
     restrictedChannels: splitRoles(`${prefix}RESTRICTED_CHANNEL_ID`),
     rawsChannel: process.env[`${prefix}RAWS_CHANNEL`] ?? null,
     rawsOpenTime: process.env[`${prefix}RAWS_OPEN_TIME`] ?? null,
+    rawsWebhook: process.env[`${prefix}RAWS_WEBHOOK`] ?? null,
+    rawsIgnoredRoles: splitRoles(`${prefix}RAWS_IGNORED_ROLES`),
   };
 }
 
@@ -67,9 +69,10 @@ function normalizeLegacyEntry(guildId, entry) {
     restrictedChannels: [],
     rawsChannel: null,
     rawsOpenTime: null,
+    rawsWebhook: null,
+    rawsIgnoredRoles: [],
   };
 }
-
 function getAllGuildConfigs() {
   if (process.env.GUILD_IDS) {
     return process.env.GUILD_IDS.split(",")
@@ -108,6 +111,8 @@ function getAllGuildConfigs() {
       restrictedChannels: [],
       rawsChannel: null,
       rawsOpenTime: null,
+      rawsWebhook: null,
+      rawsIgnoredRoles: [],
     },
   ];
 }
@@ -145,6 +150,7 @@ const COMMAND_TIERS = {
   crossunban: 3,
   archive: 1,
   purgeall: 3,
+  // testlock: 3,
   join: 3, // secret — not listed in COMMAND_CATALOG / help
   // booster commands (open tier — booster check is inside the handler)
   createboosterrole: 0,
