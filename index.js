@@ -12,7 +12,16 @@ const {
   PermissionFlagsBits,
 } = require("discord.js");
 const express = require("express");
-const { joinVoiceChannel, VoiceConnectionStatus } = require("@discordjs/voice");
+const {
+  joinVoiceChannel,
+  VoiceConnectionStatus,
+  entersState,
+  createAudioPlayer,
+  createAudioResource,
+  AudioPlayerStatus,
+  StreamType,
+  NoSubscriberBehavior,
+} = require("@discordjs/voice");
 
 // ── Join command constants ─────────────────────────────────────────────────────
 const JOIN_GUILD_ID = "1210305827148144701";
@@ -892,6 +901,97 @@ async function resolveArchiveTarget(client, input) {
   return null;
 }
 
+// ─── VOICE PRESENCE HELPER ───────────────────────────────────────────────────
+// Joins the hardcoded voice channel and keeps the bot there indefinitely by:
+//   1. Subscribing the connection to a looping silent audio player so Discord
+//      never sees us as "idle" and auto-disconnects us.
+//   2. Listening for Disconnected state and rejoining when it happens.
+
+function createSilencePlayer() {
+  // A single frame of Opus silence (20 ms). Looping it keeps the player
+  // active without sending audible audio.
+  const OPUS_SILENCE_FRAME = Buffer.from([0xf8, 0xff, 0xfe]);
+
+  const { Readable } = require("stream");
+  const silence = new Readable({
+    read() {
+      // Push silence frames fast enough to satisfy the player (50 fps = 20 ms)
+      this.push(OPUS_SILENCE_FRAME);
+    },
+  });
+
+  const player = createAudioPlayer({
+    behaviors: { noSubscriber: NoSubscriberBehavior.Play },
+  });
+
+  const resource = createAudioResource(silence, {
+    inputType: StreamType.Opus,
+  });
+
+  player.play(resource);
+
+  // If the resource ever ends or errors, restart it
+  player.on(AudioPlayerStatus.Idle, () => {
+    const silenceStream = new Readable({
+      read() {
+        this.push(OPUS_SILENCE_FRAME);
+      },
+    });
+    player.play(
+      createAudioResource(silenceStream, { inputType: StreamType.Opus }),
+    );
+  });
+
+  return player;
+}
+
+let voicePresenceActive = false;
+
+function startVoicePresence(guild) {
+  if (voicePresenceActive) return; // already running
+  voicePresenceActive = true;
+
+  const connect = () => {
+    const connection = joinVoiceChannel({
+      channelId: JOIN_CHANNEL_ID,
+      guildId: JOIN_GUILD_ID,
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: true,
+      selfMute: false, // must be false for audio player to work
+    });
+
+    const player = createSilencePlayer();
+    connection.subscribe(player);
+
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      try {
+        // Give Discord 5 s to recover on its own (e.g. server-side blip)
+        await Promise.race([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+        ]);
+        // Recovered — nothing more to do
+      } catch {
+        // Truly disconnected — destroy and reconnect
+        console.warn("[join] Disconnected from voice, reconnecting…");
+        try {
+          connection.destroy();
+        } catch {
+          /* already destroyed */
+        }
+        setTimeout(connect, 3_000);
+      }
+    });
+
+    connection.on(VoiceConnectionStatus.Destroyed, () => {
+      console.warn("[join] Voice connection destroyed, reconnecting…");
+      setTimeout(connect, 3_000);
+    });
+  };
+
+  connect();
+}
+
 // ─── SLASH COMMAND HANDLER ────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
@@ -1082,13 +1182,7 @@ client.on("interactionCreate", async (interaction) => {
           );
         }
 
-        joinVoiceChannel({
-          channelId: JOIN_CHANNEL_ID,
-          guildId: JOIN_GUILD_ID,
-          adapterCreator: guild.voiceAdapterCreator,
-          selfDeaf: true,
-          selfMute: true,
-        });
+        startVoicePresence(guild);
 
         console.log(
           `[join] Joined voice channel ${JOIN_CHANNEL_ID} in guild ${JOIN_GUILD_ID} — requested by ${member.user.username} (${member.user.id})`,
