@@ -929,6 +929,7 @@ async function resolveArchiveTarget(client, input) {
 //      never sees us as "idle" and auto-disconnects us.
 //   2. Listening for Disconnected state and rejoining when it happens.
 
+/*
 function createSilencePlayer() {
   // A single frame of Opus silence (20 ms). Looping it keeps the player
   // active without sending audible audio.
@@ -999,7 +1000,7 @@ function startVoicePresence(guild) {
         try {
           connection.destroy();
         } catch {
-          /* already destroyed */
+          // already destroyed
         }
         setTimeout(connect, 3_000);
       }
@@ -1013,6 +1014,7 @@ function startVoicePresence(guild) {
 
   connect();
 }
+*/
 
 // ─── LOCK/UNLOCK EMBED ───────────────────────────────────────────────────────
 
