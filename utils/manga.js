@@ -2,7 +2,7 @@
 
 const axios = require("axios");
 const protobuf = require("protobufjs");
-const { v1: uuidv1 } = require("uuid");
+const { randomUUID } = require("crypto");
 
 const MANGAPLUS_API = "https://jumpg-webapi.tokyo-cdn.com/api";
 
@@ -63,7 +63,7 @@ async function fetchLatestChapter(mangaplusId) {
     responseType: "arraybuffer",
     timeout: 20_000,
     headers: {
-      "SESSION-TOKEN": uuidv1(),
+      "SESSION-TOKEN": randomUUID(),
       "User-Agent": "Mozilla/5.0 (compatible; KagurabachiStaffBot/1.0)",
       Referer: "https://mangaplus.shueisha.co.jp/",
       Origin: "https://mangaplus.shueisha.co.jp",
