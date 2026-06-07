@@ -923,6 +923,7 @@ async function resolveArchiveTarget(client, input) {
   return null;
 }
 
+//
 // ─── VOICE PRESENCE HELPER ───────────────────────────────────────────────────
 // Joins the hardcoded voice channel and keeps the bot there indefinitely by:
 //   1. Subscribing the connection to a looping silent audio player so Discord
