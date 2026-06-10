@@ -34,11 +34,12 @@ async function postError(client, guildConfig, message) {
 async function setRawsChannelOpen(channel, allow, client, guildConfig) {
   const { rawsIgnoredRoles = [] } = guildConfig;
 
+  const MANAGED_PERMS = ["SendMessages", "SendMessagesInThreads"];
+
   try {
     const guild = channel.guild;
     await guild.members.fetch();
 
-    // Build updated overwrites array — one channel.edit() = one API call
     const newOverwrites = channel.permissionOverwrites.cache.map((ow) => {
       const isIgnored =
         (ow.type === 0 && rawsIgnoredRoles.includes(ow.id)) ||
@@ -48,15 +49,21 @@ async function setRawsChannelOpen(channel, allow, client, guildConfig) {
             return m && rawsIgnoredRoles.some((r) => m.roles.cache.has(r));
           })());
 
-      if (isIgnored) return ow; // pass through unchanged
+      if (isIgnored) return ow;
 
-      // Reconstruct with SendMessages flipped
-      const allowBits = allow
-        ? ow.allow.add("SendMessages")
-        : ow.allow.remove("SendMessages");
-      const denyBits = allow
-        ? ow.deny.remove("SendMessages")
-        : ow.deny.add("SendMessages");
+      // Only flip the two managed permissions — leave everything else alone
+      let allowBits = ow.allow;
+      let denyBits = ow.deny;
+
+      for (const perm of MANAGED_PERMS) {
+        if (allow) {
+          allowBits = allowBits.add(perm);
+          denyBits = denyBits.remove(perm);
+        } else {
+          allowBits = allowBits.remove(perm);
+          denyBits = denyBits.add(perm);
+        }
+      }
 
       return { id: ow.id, type: ow.type, allow: allowBits, deny: denyBits };
     });
@@ -68,30 +75,37 @@ async function setRawsChannelOpen(channel, allow, client, guildConfig) {
         (o) => (o.id?.id ?? o.id) === everyoneId,
       );
       const base = channel.permissionOverwrites.cache.get(everyoneId);
-      const allowBits = allow
-        ? (base?.allow ?? new PermissionsBitField()).add("SendMessages")
-        : (base?.allow ?? new PermissionsBitField()).remove("SendMessages");
-      const denyBits = allow
-        ? (base?.deny ?? new PermissionsBitField()).remove("SendMessages")
-        : (base?.deny ?? new PermissionsBitField()).add("SendMessages");
+      let allowBits = base?.allow ?? new PermissionsBitField();
+      let denyBits = base?.deny ?? new PermissionsBitField();
+
+      for (const perm of MANAGED_PERMS) {
+        if (allow) {
+          allowBits = allowBits.add(perm);
+          denyBits = denyBits.remove(perm);
+        } else {
+          allowBits = allowBits.remove(perm);
+          denyBits = denyBits.add(perm);
+        }
+      }
+
       const entry = {
         id: everyoneId,
         type: 0,
         allow: allowBits,
         deny: denyBits,
       };
-
       if (everyoneIdx >= 0) newOverwrites[everyoneIdx] = entry;
       else newOverwrites.push(entry);
     }
 
+    // Bot always gets SendMessages allowed (no thread permissions added)
     const botId = client.user.id;
     const botIdx = newOverwrites.findIndex((o) => (o.id?.id ?? o.id) === botId);
     const base = channel.permissionOverwrites.cache.get(botId);
-    const allowBits = (base?.allow ?? new PermissionsBitField()).add(
+    let allowBits = (base?.allow ?? new PermissionsBitField()).add(
       "SendMessages",
     );
-    const denyBits = (base?.deny ?? new PermissionsBitField()).remove(
+    let denyBits = (base?.deny ?? new PermissionsBitField()).remove(
       "SendMessages",
     );
     const entry = { id: botId, type: 1, allow: allowBits, deny: denyBits };
