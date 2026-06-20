@@ -146,6 +146,7 @@ const COMMAND_TIERS = {
   mangacheck: 2,
   crossmute: 2,
   crossunmute: 2,
+  downloademotes: 3,
   crossban: 3,
   crossunban: 3,
   archive: 1,
@@ -158,6 +159,7 @@ const COMMAND_TIERS = {
   boosterroleimage: 0,
   deleteboosterrole: 0,
   claimboosterrole: 0,
+  transferemotes: 3,
 };
 
 /**
@@ -224,6 +226,17 @@ const COMMAND_CATALOG = [
     usage: "/mangacheck  (slash command only)",
     description: "Manually check for a new manga chapter and post it if found.",
     args: [],
+  },
+  {
+    name: "downloademotes",
+    tier: 3,
+    usage: "/downloademotes source:<guildID> type:emojis|stickers|both",
+    description:
+      "Download all emojis/stickers from a server, convert to WebP, and send a ZIP.",
+    args: [
+      "`source` — The ID of the server to download from (bot must be in it).",
+      "`type` — What to download: `emojis`, `stickers`, or `both` (default).",
+    ],
   },
   {
     name: "crossban",

@@ -1,4 +1,4 @@
-{role} **{mangaName}** ({chapterName}) is out now, read it from the official site!
+{role} **{mangaName}** ({chapterName}) is out now, read it from the Mangaplus website!
 <{chapterLink}>
 
 Buy Kagurabachi Volumes here:

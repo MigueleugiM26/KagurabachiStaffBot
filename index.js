@@ -62,6 +62,8 @@ const {
   executeClaimBoosterRole,
 } = require("./commands/booster");
 const { executePurgeAll } = require("./commands/purge");
+const { executeTransferEmotes } = require("./commands/transferemotes");
+const { executeDownloadEmotes } = require("./commands/downloademotes");
 
 // ─── CLIENT ───────────────────────────────────────────────────────────────────
 
@@ -229,6 +231,58 @@ const crossCommands = [
           "Paste a custom emoji (e.g. <:name:id>) or a sticker ID",
         )
         .setRequired(true),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("downloademotes")
+    .setDescription("Download all emojis/stickers from a server → WebP → ZIP")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageEmojisAndStickers)
+    .addStringOption((option) =>
+      option
+        .setName("source")
+        .setDescription("Guild ID to download from")
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("type")
+        .setDescription("What to download")
+        .setRequired(false)
+        .addChoices(
+          { name: "Emojis only", value: "emojis" },
+          { name: "Stickers only", value: "stickers" },
+          { name: "Both emojis and stickers", value: "both" },
+        ),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("transferemotes")
+    .setDescription(
+      "Tier 3 — Copy emojis/stickers from one server into another",
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageEmojisAndStickers)
+    .addStringOption((o) =>
+      o
+        .setName("source")
+        .setDescription("Source guild ID (copy FROM)")
+        .setRequired(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("target")
+        .setDescription("Target guild ID (copy INTO)")
+        .setRequired(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("type")
+        .setDescription("What to transfer")
+        .setRequired(true)
+        .addChoices(
+          { name: "Emojis only", value: "emojis" },
+          { name: "Stickers only", value: "stickers" },
+          { name: "Both emojis and stickers", value: "both" },
+        ),
     ),
 
   // ── Booster commands ───────────────────────────────────────────────────────
@@ -496,6 +550,7 @@ client.on("messageCreate", async (message) => {
       "archive",
       "mangacheck",
       "purgeall",
+      "transferemotes",
     ];
 
     // ── Booster commands — no userId, uses the message author ──────────────
@@ -673,6 +728,25 @@ client.on("messageCreate", async (message) => {
           staffName: message.author.username,
           staffId: message.author.id,
           editProgressFn,
+        });
+      }
+
+      if (command === "transferemotes") {
+        const sourceGuildId = args[1];
+        const targetGuildId = args[2];
+        const type = args[3]?.toLowerCase() || "both";
+        if (!sourceGuildId || !targetGuildId) {
+          return message.reply(
+            `❌ Usage: \`${CROSS_PREFIX}transferemotes <sourceGuildId> <targetGuildId> [type]\``,
+          );
+        }
+        return executeTransferEmotes(client, {
+          sourceGuildId,
+          targetGuildId,
+          staffName: message.author.username,
+          staffId: message.author.id,
+          replyTarget: message,
+          type,
         });
       }
 
@@ -1182,6 +1256,8 @@ client.on("interactionCreate", async (interaction) => {
       "archive",
       "purgeall",
       "join",
+      "transferemotes",
+      "downloademotes",
       /*
       "testlock",
       "testunlock",
@@ -1266,6 +1342,19 @@ client.on("interactionCreate", async (interaction) => {
           boosterGuildCfg2?.boosterAnchorRoleId ?? null,
         );
       }
+    }
+
+    if (commandName === "downloademotes") {
+      await interaction.deferReply({ ephemeral: false });
+      const sourceGuildId = interaction.options.getString("source");
+      const type = interaction.options.getString("type") ?? "both";
+      return executeDownloadEmotes(client, {
+        sourceGuildId,
+        type,
+        staffName: member.user.username,
+        staffId: member.user.id,
+        replyTarget: interaction,
+      });
     }
 
     if (!validCommands.includes(commandName)) return;
@@ -1413,6 +1502,21 @@ client.on("interactionCreate", async (interaction) => {
       } catch (err) {
         await interaction.editReply(`❌ Error: ${err.message}`);
       }
+    }
+
+    // transferemotes — tier 3
+    if (commandName === "transferemotes") {
+      const sourceGuildId = interaction.options.getString("source");
+      const targetGuildId = interaction.options.getString("target");
+      const type = interaction.options.getString("type"); // required
+      return executeTransferEmotes(client, {
+        sourceGuildId,
+        targetGuildId,
+        staffName: member.user.username,
+        staffId: member.user.id,
+        replyTarget: interaction,
+        type,
+      });
     }
 
     // testlock — tier 3 (temporary)
