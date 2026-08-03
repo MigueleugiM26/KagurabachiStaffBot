@@ -40,6 +40,7 @@ const { buildEmbed } = require("./utils/helpers");
 const { buildHelpPayload } = require("./utils/help");
 const { executeReports } = require("./utils/reports");
 const { initMangaSchedulers } = require("./utils/manga-scheduler");
+const cron = require("node-cron");
 
 // ── Commands ───────────────────────────────────────────────────────────────────
 const {
@@ -60,7 +61,18 @@ const {
   executeBoosterRoleImage,
   executeDeleteBoosterRole,
   executeClaimBoosterRole,
+  handleBoostLost,
+  executeAuditBoosterRoles,
+  executePruneBoosterRoles,
 } = require("./commands/booster");
+const {
+  executeCreatePremiumRole,
+  executeEditPremiumColor,
+  executePremiumRoleImage,
+  executeDeletePremiumRole,
+  executeClaimPremiumRole,
+  runPremiumRotation,
+} = require("./commands/premium");
 const { executePurgeAll } = require("./commands/purge");
 const { executeTransferEmotes } = require("./commands/transferemotes");
 const { executeDownloadEmotes } = require("./commands/downloademotes");
@@ -380,6 +392,118 @@ const crossCommands = [
     ),
 
   new SlashCommandBuilder()
+    .setName("auditboosterroles")
+    .setDescription(
+      "🔎 Tier 3 — List all tracked booster roles and whether their owners are still boosting",
+    ),
+
+  new SlashCommandBuilder()
+    .setName("pruneboosterroles")
+    .setDescription(
+      "🧹 Tier 3 — Remove booster roles from non-boosters and clear DB ownership",
+    ),
+
+  // ── Premium (Sword Bearer) commands ─────────────────────────────────────────
+  new SlashCommandBuilder()
+    .setName("createpremiumrole")
+    .setDescription(
+      "⚔️ Sword Bearers only — Create your own custom premium role",
+    )
+    .addStringOption((o) =>
+      o.setName("name").setDescription("Name for your role").setRequired(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("type")
+        .setDescription(
+          "Colour type: solid (default), gradient, or holographic",
+        )
+        .addChoices(
+          { name: "solid", value: "solid" },
+          { name: "gradient", value: "gradient" },
+          { name: "holographic", value: "holographic" },
+        )
+        .setRequired(false),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("color1")
+        .setDescription("Primary hex colour, e.g. FF0000")
+        .setRequired(false),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("color2")
+        .setDescription("Secondary hex colour (gradient only)")
+        .setRequired(false),
+    )
+    .addAttachmentOption((o) =>
+      o
+        .setName("icon")
+        .setDescription("Image to use as your role icon (requires Level 2)")
+        .setRequired(false),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("editpremiumcolor")
+    .setDescription(
+      "⚔️ Sword Bearers only — Edit your premium role's colour/type",
+    )
+    .addStringOption((o) =>
+      o
+        .setName("type")
+        .setDescription("Colour type")
+        .addChoices(
+          { name: "solid", value: "solid" },
+          { name: "gradient", value: "gradient" },
+          { name: "holographic", value: "holographic" },
+        )
+        .setRequired(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("color1")
+        .setDescription("Primary hex colour")
+        .setRequired(false),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("color2")
+        .setDescription("Secondary hex colour (gradient only)")
+        .setRequired(false),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("premiumroleimage")
+    .setDescription(
+      "⚔️ Sword Bearers only — Set your premium role's icon from an image",
+    )
+    .addAttachmentOption((o) =>
+      o
+        .setName("icon")
+        .setDescription("Image to set as your role icon")
+        .setRequired(true),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("deletepremiumrole")
+    .setDescription("⚔️ Sword Bearers only — Delete your custom premium role"),
+
+  new SlashCommandBuilder()
+    .setName("claimpremiumrole")
+    .setDescription(
+      "⚔️ Sword Bearers only — Claim an existing role into the premium system",
+    )
+    .addStringOption((o) =>
+      o
+        .setName("roleid")
+        .setDescription(
+          "Role ID to claim (only needed if you have multiple claimable roles)",
+        )
+        .setRequired(false),
+    ),
+
+  new SlashCommandBuilder()
     .setName("purgeall")
     .setDescription("Tier 3 — Delete every message in an allowlisted channel")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
@@ -418,6 +542,22 @@ client.once("ready", async () => {
     client,
     configs,
     path.join(__dirname, "messages"),
+  );
+
+  // ── Monthly premium rotation: runs at 00:00 on the 3rd of every month ──────
+  // Gives ~2 days after the 1st-of-month role swap for the new Sword Bearers
+  // to be assigned before expired custom roles are cleaned up.
+  cron.schedule(
+    "0 0 3 * *",
+    () => {
+      runPremiumRotation(client, configs).catch((err) =>
+        console.error("[premium-rotation] Unhandled error:", err.message),
+      );
+    },
+    { scheduled: true, timezone: "UTC" },
+  );
+  console.log(
+    "[premium] 📅 Monthly rotation scheduled: 3rd of each month at 00:00 UTC",
   );
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
@@ -561,6 +701,8 @@ client.on("messageCreate", async (message) => {
         "boosterroleimage",
         "deleteboosterrole",
         "claimboosterrole",
+        "auditboosterroles",
+        "pruneboosterroles",
       ].includes(command)
     ) {
       const replyFn = (c) => message.reply(c);
@@ -630,6 +772,116 @@ client.on("messageCreate", async (message) => {
           },
           replyFn,
           guildCfg2?.boosterAnchorRoleId ?? null,
+        );
+      }
+      if (command === "auditboosterroles") {
+        if (!hasTierAccess(message.member, config, "auditboosterroles")) {
+          return message.reply(
+            "❌ You don't have permission to use this command.",
+          );
+        }
+        return executeAuditBoosterRoles(message.guild, replyFn);
+      }
+      if (command === "pruneboosterroles") {
+        if (!hasTierAccess(message.member, config, "pruneboosterroles")) {
+          return message.reply(
+            "❌ You don't have permission to use this command.",
+          );
+        }
+        return executePruneBoosterRoles(message.guild, replyFn);
+      }
+    }
+
+    // ── Premium (Sword Bearer) commands ──────────────────────────────────────
+    if (
+      [
+        "createpremiumrole",
+        "editpremiumcolor",
+        "premiumroleimage",
+        "deletepremiumrole",
+        "claimpremiumrole",
+      ].includes(command)
+    ) {
+      const replyFn = (c) => message.reply(c);
+      const premCfg = getGuildConfig(message.guild.id);
+      const premiumRoleId = premCfg?.premiumRoleId ?? null;
+      const premiumAnchorRoleId = premCfg?.premiumAnchorRoleId ?? null;
+      const bottomPremiumAnchorRoleId =
+        premCfg?.bottomPremiumAnchorRoleId ?? null;
+      const ignoredPremiumRoles = premCfg?.ignoredPremiumRoles ?? [];
+
+      if (command === "createpremiumrole") {
+        const [roleName, type, color1, color2] = args.slice(1);
+        if (!roleName)
+          return message.reply(
+            "❌ Usage: `&createPremiumRole <n> [type] [color1] [color2]`",
+          );
+        const imageAttachment = message.attachments.first() ?? null;
+        return executeCreatePremiumRole(
+          message.guild,
+          message.member,
+          {
+            roleName,
+            type: type?.toLowerCase(),
+            color1,
+            color2,
+            imageAttachment,
+            premiumRoleId,
+            anchorRoleId: premiumAnchorRoleId,
+          },
+          replyFn,
+        );
+      }
+      if (command === "editpremiumcolor") {
+        const [type, color1, color2] = args.slice(1);
+        if (!type)
+          return message.reply(
+            "❌ Usage: `&editPremiumColor <type> <color1> [color2]`",
+          );
+        return executeEditPremiumColor(
+          message.guild,
+          message.member,
+          { type: type.toLowerCase(), color1, color2, premiumRoleId },
+          replyFn,
+        );
+      }
+      if (command === "premiumroleimage") {
+        const imageAttachment = message.attachments.first() ?? null;
+        return executePremiumRoleImage(
+          message.guild,
+          message.member,
+          imageAttachment,
+          { premiumRoleId },
+          replyFn,
+        );
+      }
+      if (command === "deletepremiumrole") {
+        return executeDeletePremiumRole(
+          message.guild,
+          message.member,
+          { premiumRoleId },
+          replyFn,
+        );
+      }
+      if (command === "claimpremiumrole") {
+        const configRoleIds = [
+          ...(premCfg?.tier1Roles ?? []),
+          ...(premCfg?.tier2Roles ?? []),
+          ...(premCfg?.tier3Roles ?? []),
+        ];
+        const specifiedRoleId = args[1]?.replace(/[<@&>]/g, "") || null;
+        return executeClaimPremiumRole(
+          message.guild,
+          message.member,
+          {
+            premiumRoleId,
+            anchorRoleId: premiumAnchorRoleId,
+            bottomAnchorRoleId: bottomPremiumAnchorRoleId,
+            ignoredPremiumRoles,
+            configRoleIds,
+            specifiedRoleId,
+          },
+          replyFn,
         );
       }
     }
@@ -1344,6 +1596,131 @@ client.on("interactionCreate", async (interaction) => {
       }
     }
 
+    // ── Premium (Sword Bearer) commands — handled before validCommands check ──
+    if (
+      [
+        "createpremiumrole",
+        "editpremiumcolor",
+        "premiumroleimage",
+        "deletepremiumrole",
+        "claimpremiumrole",
+      ].includes(commandName)
+    ) {
+      await interaction.deferReply({ ephemeral: true });
+      const replyFn = async (c) =>
+        interaction.editReply(typeof c === "string" ? { content: c } : c);
+      const premCfg = getGuildConfig(guild.id);
+      const premiumRoleId = premCfg?.premiumRoleId ?? null;
+
+      if (commandName === "createpremiumrole") {
+        const roleName = interaction.options.getString("name");
+        const type = interaction.options.getString("type") ?? "solid";
+        const color1 = interaction.options.getString("color1") ?? null;
+        const color2 = interaction.options.getString("color2") ?? null;
+        const imageAttachment =
+          interaction.options.getAttachment("icon") ?? null;
+        return executeCreatePremiumRole(
+          guild,
+          member,
+          {
+            roleName,
+            type,
+            color1,
+            color2,
+            imageAttachment,
+            premiumRoleId,
+            anchorRoleId: premCfg?.premiumAnchorRoleId ?? null,
+          },
+          replyFn,
+        );
+      }
+      if (commandName === "editpremiumcolor") {
+        const type = interaction.options.getString("type");
+        const color1 = interaction.options.getString("color1");
+        const color2 = interaction.options.getString("color2") ?? null;
+        return executeEditPremiumColor(
+          guild,
+          member,
+          { type, color1, color2, premiumRoleId },
+          replyFn,
+        );
+      }
+      if (commandName === "premiumroleimage") {
+        const imageAttachment = interaction.options.getAttachment("icon");
+        return executePremiumRoleImage(
+          guild,
+          member,
+          imageAttachment,
+          { premiumRoleId },
+          replyFn,
+        );
+      }
+      if (commandName === "deletepremiumrole") {
+        return executeDeletePremiumRole(
+          guild,
+          member,
+          { premiumRoleId },
+          replyFn,
+        );
+      }
+      if (commandName === "claimpremiumrole") {
+        const configRoleIds = [
+          ...(premCfg?.tier1Roles ?? []),
+          ...(premCfg?.tier2Roles ?? []),
+          ...(premCfg?.tier3Roles ?? []),
+        ];
+        const specifiedRoleId =
+          interaction.options.getString("roleid")?.replace(/[<@&>]/g, "") ||
+          null;
+        return executeClaimPremiumRole(
+          guild,
+          member,
+          {
+            premiumRoleId,
+            anchorRoleId: premCfg?.premiumAnchorRoleId ?? null,
+            bottomAnchorRoleId: premCfg?.bottomPremiumAnchorRoleId ?? null,
+            ignoredPremiumRoles: premCfg?.ignoredPremiumRoles ?? [],
+            configRoleIds,
+            specifiedRoleId,
+          },
+          replyFn,
+        );
+      }
+    }
+
+    if (
+      commandName === "auditboosterroles" ||
+      commandName === "pruneboosterroles"
+    ) {
+      const auditCfg = getGuildConfig(guild.id);
+      if (!hasTierAccess(member, auditCfg, commandName)) {
+        return interaction.reply({
+          content: "❌ You don't have permission to use this command.",
+          ephemeral: true,
+        });
+      }
+      await interaction.deferReply({ ephemeral: true });
+      // replyFn that sends multiple embeds via editReply + followUp
+      let firstReply = true;
+      const replyFn = async (c) => {
+        if (firstReply) {
+          firstReply = false;
+          return interaction.editReply(
+            typeof c === "string" ? { content: c } : c,
+          );
+        }
+        return interaction.followUp(
+          typeof c === "string"
+            ? { content: c, ephemeral: true }
+            : { ...c, ephemeral: true },
+        );
+      };
+      if (commandName === "auditboosterroles") {
+        return executeAuditBoosterRoles(guild, replyFn);
+      }
+      return executePruneBoosterRoles(guild, replyFn);
+    }
+
     if (commandName === "downloademotes") {
       await interaction.deferReply({ ephemeral: false });
       const sourceGuildId = interaction.options.getString("source");
@@ -1727,35 +2104,51 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
 // ─── BOOSTER WELCOME ─────────────────────────────────────────────────────────
 
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
-  // Only fire when premium status is newly gained (null → timestamp)
+  const guildId = newMember.guild.id;
+
+  // ── Boost gained → send welcome message ────────────────────────────────────
   const justBoosted =
     !oldMember.premiumSinceTimestamp && newMember.premiumSinceTimestamp;
-  if (!justBoosted) return;
-
-  const guildId = newMember.guild.id;
-  const channelId = process.env[`GUILD_${guildId}_BOOSTER_WELCOME_CHANNEL_ID`];
-  if (!channelId) return;
-
-  try {
-    const channel = await newMember.guild.channels.fetch(channelId);
-    if (!channel) {
-      return console.error(
-        `[booster-welcome] Channel ${channelId} not found in guild ${guildId}`,
-      );
+  if (justBoosted) {
+    const channelId =
+      process.env[`GUILD_${guildId}_BOOSTER_WELCOME_CHANNEL_ID`];
+    if (channelId) {
+      try {
+        const channel = await newMember.guild.channels.fetch(channelId);
+        if (!channel) {
+          console.error(
+            `[booster-welcome] Channel ${channelId} not found in guild ${guildId}`,
+          );
+        } else {
+          await channel.send(
+            `🚀 Thank you for boosting **${newMember.guild.name}**, <@${newMember.id}>! ` +
+              `Check the pinned messages in this channel to learn how to set up your custom booster role.`,
+          );
+          console.log(
+            `[booster-welcome] Welcomed new booster ${newMember.user.username} (${newMember.id}) in guild ${guildId}`,
+          );
+        }
+      } catch (err) {
+        console.error(
+          `[booster-welcome] Error sending welcome in guild ${guildId}:`,
+          err.message,
+        );
+      }
     }
+  }
 
-    await channel.send(
-      `🚀 Thank you for boosting **${newMember.guild.name}**, <@${newMember.id}>! ` +
-        `Check the pinned messages in this channel to learn how to set up your custom booster role.`,
-    );
-
+  // ── Boost lost → remove booster role from member, clear DB owner ───────────
+  const justUnboosted =
+    oldMember.premiumSinceTimestamp && !newMember.premiumSinceTimestamp;
+  if (justUnboosted) {
     console.log(
-      `[booster-welcome] Welcomed new booster ${newMember.user.username} (${newMember.id}) in guild ${guildId}`,
+      `[booster] ${newMember.user.username} (${newMember.id}) stopped boosting guild ${guildId}`,
     );
-  } catch (err) {
-    console.error(
-      `[booster-welcome] Error sending welcome in guild ${guildId}:`,
-      err.message,
+    await handleBoostLost(newMember.guild, newMember).catch((err) =>
+      console.error(
+        `[booster] handleBoostLost error for ${newMember.id}:`,
+        err.message,
+      ),
     );
   }
 });

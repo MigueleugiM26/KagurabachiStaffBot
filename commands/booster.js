@@ -269,7 +269,7 @@ async function executeEditBoosterColor(guild, member, opts, reply) {
   const entry = await getEntry(guild.id, member.id);
   if (!entry)
     return reply(
-      "\u274c You don't have a booster role yet. Use `createBoosterRole` to create one.",
+      "\u274c You don't have a booster role yet. Use `createBoosterRole` to create one, or `claimBoosterRole` to claim an existing role.",
     );
 
   const { type = "solid", color2 } = opts;
@@ -355,7 +355,7 @@ async function executeBoosterRoleImage(guild, member, imageAttachment, reply) {
   const entry = await getEntry(guild.id, member.id);
   if (!entry)
     return reply(
-      "\u274c You don't have a booster role yet. Use `createBoosterRole` to create one.",
+      "\u274c You don't have a booster role yet. Use `createBoosterRole` to create one, or `claimBoosterRole` to claim an existing role.",
     );
   if (!imageAttachment)
     return reply("\u274c Please attach an image to set as your role icon.");
@@ -599,6 +599,244 @@ async function _claimRole(guild, member, role, reply) {
   return reply({ embeds: [embed] });
 }
 
+// ─── AUDIT HELPERS ────────────────────────────────────────────────────────────
+
+async function getAllActiveEntries(guildId) {
+  try {
+    const col = await getCollection();
+    return await col
+      .find({ guildId, roleId: { $ne: null } }, { projection: { _id: 0 } })
+      .toArray();
+  } catch (err) {
+    console.error("[booster:getAllActiveEntries]", err.message);
+    return [];
+  }
+}
+
+// ─── AUDIT: REVIEW ────────────────────────────────────────────────────────────
+
+/**
+ * &auditBoosterRoles / /auditboosterroles  (Tier 3)
+ *
+ * Lists every DB entry that has an active roleId, together with whether the
+ * owner is still boosting.  Paginated via embeds to stay under Discord's
+ * 6000-character embed limit.
+ */
+async function executeAuditBoosterRoles(guild, reply) {
+  await guild.members.fetch(); // ensure cache is warm
+
+  const entries = await getAllActiveEntries(guild.id);
+  if (entries.length === 0) {
+    return reply("ℹ️ No active booster role entries found in the database.");
+  }
+
+  // Build one line per entry
+  const lines = [];
+  for (const entry of entries) {
+    const member = guild.members.cache.get(entry.userId);
+    const stillBoosting = member ? isBooster(member) : false;
+    const statusEmoji = stillBoosting ? "✅" : "❌";
+
+    const userTag = member
+      ? `${member.user.username} (<@${entry.userId}>)`
+      : `Unknown user (\`${entry.userId}\`)`;
+
+    const role = guild.roles.cache.get(entry.roleId);
+    const roleName = role
+      ? `**${role.name}**`
+      : `~~deleted~~ (\`${entry.roleId}\`)`;
+
+    lines.push(`${statusEmoji} ${userTag} → ${roleName}`);
+  }
+
+  // Paginate into ≤ 20 lines per embed to stay well under limits
+  const PAGE = 20;
+  const pages = [];
+  for (let i = 0; i < lines.length; i += PAGE) {
+    pages.push(lines.slice(i, i + PAGE));
+  }
+
+  const activeCount = lines.filter((l) => l.startsWith("✅")).length;
+  const expiredCount = lines.filter((l) => l.startsWith("❌")).length;
+
+  for (let p = 0; p < pages.length; p++) {
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Blurple)
+      .setTitle(
+        `🔎 Booster Role Audit${pages.length > 1 ? ` (${p + 1}/${pages.length})` : ""}`,
+      )
+      .setDescription(pages[p].join("\n"))
+      .setFooter({
+        text:
+          p === pages.length - 1
+            ? `Total: ${entries.length} | ✅ Still boosting: ${activeCount} | ❌ Not boosting: ${expiredCount}`
+            : `Page ${p + 1} of ${pages.length}`,
+      })
+      .setTimestamp();
+
+    // First page goes through reply(), subsequent pages go through followUp if possible
+    if (p === 0) {
+      await reply({ embeds: [embed] });
+    } else {
+      // reply() is an abstraction — try followUp, fall back to another reply
+      try {
+        await reply({ embeds: [embed] });
+      } catch {
+        // non-fatal if extra pages fail
+      }
+    }
+  }
+}
+
+// ─── AUDIT: PRUNE ─────────────────────────────────────────────────────────────
+
+/**
+ * &pruneBoosterRoles / /pruneboosterroles  (Tier 3)
+ *
+ * For every DB entry whose owner is no longer boosting:
+ *   1. Remove the Discord role from the member (if they still have it)
+ *   2. Set roleId → null in the DB
+ *
+ * The role itself is never deleted.
+ */
+async function executePruneBoosterRoles(guild, reply) {
+  await guild.members.fetch(); // ensure cache is warm
+
+  const entries = await getAllActiveEntries(guild.id);
+  if (entries.length === 0) {
+    return reply("ℹ️ No active booster role entries found in the database.");
+  }
+
+  const expired = entries.filter((entry) => {
+    const member = guild.members.cache.get(entry.userId);
+    return !member || !isBooster(member);
+  });
+
+  if (expired.length === 0) {
+    return reply(
+      "✅ All booster role owners are still actively boosting. Nothing to prune.",
+    );
+  }
+
+  const results = [];
+
+  for (const entry of expired) {
+    const member = guild.members.cache.get(entry.userId);
+    const role = guild.roles.cache.get(entry.roleId);
+    const roleName = role ? role.name : `(unknown — \`${entry.roleId}\`)`;
+    const userTag = member
+      ? `${member.user.username} (\`${entry.userId}\`)`
+      : `Unknown user (\`${entry.userId}\`)`;
+
+    // Remove the role from the member if they're still in the guild and still have it
+    if (member && member.roles.cache.has(entry.roleId)) {
+      try {
+        await member.roles.remove(
+          entry.roleId,
+          "Booster role pruned — user is no longer boosting",
+        );
+      } catch (err) {
+        console.error(
+          `[pruneBoosterRoles] Failed to remove role ${entry.roleId} from ${entry.userId}: ${err.message}`,
+        );
+        results.push(
+          `⚠️ ${userTag} — failed to remove role **${roleName}**: ${err.message}`,
+        );
+        continue;
+      }
+    }
+
+    // Clear ownership in DB
+    try {
+      const col = await getCollection();
+      await col.updateOne(
+        { guildId: guild.id, userId: entry.userId },
+        { $set: { roleId: null } },
+      );
+      results.push(
+        `🗑️ ${userTag} — removed from **${roleName}** and cleared in DB`,
+      );
+    } catch (err) {
+      console.error(
+        `[pruneBoosterRoles] Failed to clear DB for ${entry.userId}: ${err.message}`,
+      );
+      results.push(
+        `⚠️ ${userTag} — role removed but DB update failed: ${err.message}`,
+      );
+    }
+  }
+
+  // Paginate results
+  const PAGE = 20;
+  const pages = [];
+  for (let i = 0; i < results.length; i += PAGE) {
+    pages.push(results.slice(i, i + PAGE));
+  }
+
+  for (let p = 0; p < pages.length; p++) {
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Orange)
+      .setTitle(
+        `🧹 Booster Role Prune${pages.length > 1 ? ` (${p + 1}/${pages.length})` : ""}`,
+      )
+      .setDescription(pages[p].join("\n"))
+      .setFooter({
+        text:
+          p === pages.length - 1
+            ? `Pruned ${expired.length} of ${entries.length} tracked roles`
+            : `Page ${p + 1} of ${pages.length}`,
+      })
+      .setTimestamp();
+
+    await reply({ embeds: [embed] });
+  }
+}
+
+// ─── UN-BOOST HANDLER ─────────────────────────────────────────────────────────
+
+/**
+ * Called when a member's premium (boost) status is lost.
+ * Removes their booster role from the member and sets roleId to null in the DB
+ * (the role itself is kept — the owner can reclaim it if they re-boost).
+ *
+ * @param {import('discord.js').Guild} guild
+ * @param {import('discord.js').GuildMember} member
+ */
+async function handleBoostLost(guild, member) {
+  const entry = await getEntry(guild.id, member.id);
+  if (!entry?.roleId) return; // nothing tracked for this user
+
+  // Remove the role from the member
+  try {
+    if (member.roles.cache.has(entry.roleId)) {
+      await member.roles.remove(
+        entry.roleId,
+        "User stopped boosting — booster role removed",
+      );
+      console.log(
+        `[booster] Removed role ${entry.roleId} from ${member.user.tag} (${member.id}) in guild ${guild.id} — boost ended`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[booster:handleBoostLost] Failed to remove role from ${member.id}: ${err.message}`,
+    );
+  }
+
+  // Mark the DB entry as having no owner (roleId → null keeps history intact)
+  try {
+    const col = await getCollection();
+    await col.updateOne(
+      { guildId: guild.id, userId: member.id },
+      { $set: { roleId: null } },
+    );
+  } catch (err) {
+    console.error(
+      `[booster:handleBoostLost] Failed to clear DB entry for ${member.id}: ${err.message}`,
+    );
+  }
+}
+
 // ─── EXPORTS ──────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -607,4 +845,7 @@ module.exports = {
   executeBoosterRoleImage,
   executeDeleteBoosterRole,
   executeClaimBoosterRole,
+  handleBoostLost,
+  executeAuditBoosterRoles,
+  executePruneBoosterRoles,
 };

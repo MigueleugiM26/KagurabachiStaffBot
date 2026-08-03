@@ -33,6 +33,12 @@ function readGuildEntry(guildId) {
     bottomBoosterAnchorRoleId:
       process.env[`${prefix}BOTTOM_BOOSTER_ANCHOR_ROLE_ID`] ?? null,
     ignoredBoosterRoles: splitRoles(`${prefix}IGNORED_BOOSTER_ROLES`),
+    // ── Premium (Sword Bearer) role settings (all optional) ──
+    premiumRoleId: process.env[`${prefix}PREMIUM_ROLE_ID`] ?? null,
+    premiumAnchorRoleId: process.env[`${prefix}PREMIUM_ANCHOR_ROLE_ID`] ?? null,
+    bottomPremiumAnchorRoleId:
+      process.env[`${prefix}BOTTOM_PREMIUM_ANCHOR_ROLE_ID`] ?? null,
+    ignoredPremiumRoles: splitRoles(`${prefix}IGNORED_PREMIUM_ROLES`),
     purgeChannels: splitRoles(`${prefix}PURGE_CHANNELS`),
     restrictedChannels: splitRoles(`${prefix}RESTRICTED_CHANNEL_ID`),
     rawsChannel: process.env[`${prefix}RAWS_CHANNEL`] ?? null,
@@ -159,6 +165,14 @@ const COMMAND_TIERS = {
   boosterroleimage: 0,
   deleteboosterrole: 0,
   claimboosterrole: 0,
+  auditboosterroles: 3,
+  pruneboosterroles: 3,
+  // premium (Sword Bearer) commands (open tier, eligibility check is inside the handler)
+  createpremiumrole: 0,
+  editpremiumcolor: 0,
+  premiumroleimage: 0,
+  deletepremiumrole: 0,
+  claimpremiumrole: 0,
   transferemotes: 3,
 };
 
@@ -348,6 +362,76 @@ const COMMAND_CATALOG = [
     description:
       "🚀 Boosters only — Claim an existing role (e.g. from Booster Bot) into this system.",
     args: [],
+  },
+  {
+    name: "auditboosterroles",
+    tier: 3,
+    usage: "&auditBoosterRoles",
+    description:
+      "🔎 Tier 3 — List all tracked booster roles and whether their owners are still boosting.",
+    args: [],
+  },
+  {
+    name: "pruneboosterroles",
+    tier: 3,
+    usage: "&pruneBoosterRoles",
+    description:
+      "🧹 Tier 3 — Remove booster roles from members who are no longer boosting and clear DB ownership.",
+    args: [],
+  },
+  // ── Premium (Sword Bearer) commands ─────────────────────────────────────────
+  {
+    name: "createpremiumrole",
+    tier: 0,
+    usage: "&createPremiumRole <n> [type] [color1] [color2]",
+    description: "⚔️ Sword Bearers only — Create your own custom premium role.",
+    args: [
+      "`name` — The name for your role (required).",
+      "`type` *(optional)* — `solid` (default), `gradient`, or `holographic`.",
+      "`color1` *(optional)* — Primary hex colour, e.g. `FF0000` or `#FF0000`.",
+      "`color2` *(optional, gradient only)* — Secondary hex colour.",
+      "*Attach an image* to set it as your role icon (requires server Level 2).",
+    ],
+  },
+  {
+    name: "editpremiumcolor",
+    tier: 0,
+    usage: "&editPremiumColor <type> <color1> [color2]",
+    description:
+      "⚔️ Sword Bearers only — Edit your premium role's colour/type.",
+    args: [
+      "`type` — `solid`, `gradient`, or `holographic`.",
+      "`color1` — Primary hex colour.",
+      "`color2` *(gradient only)* — Secondary hex colour.",
+    ],
+  },
+  {
+    name: "premiumroleimage",
+    tier: 0,
+    usage: "&premiumRoleImage (attach an image)",
+    description:
+      "⚔️ Sword Bearers only — Set your premium role's icon from an image.",
+    args: [
+      "*Attach an image* to the message — it will be set as your role icon.",
+      "Requires the server to have the **Role Icons** feature (Level 2 boost).",
+    ],
+  },
+  {
+    name: "deletepremiumrole",
+    tier: 0,
+    usage: "&deletePremiumRole",
+    description: "⚔️ Sword Bearers only — Delete your custom premium role.",
+    args: [],
+  },
+  {
+    name: "claimpremiumrole",
+    tier: 0,
+    usage: "&claimPremiumRole [roleID]",
+    description:
+      "⚔️ Sword Bearers only — Claim an existing role into the premium system.",
+    args: [
+      "`roleID` *(optional)* — Specify which role to claim if multiple candidates are found.",
+    ],
   },
 ];
 
