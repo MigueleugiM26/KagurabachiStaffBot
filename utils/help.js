@@ -82,17 +82,74 @@ function buildHelpPayload(commandName, config, guild = null) {
       text: 'Use "&help <command>" or "/help command:<name>" for details. Commands marked "/" are slash-only.',
     });
 
+  // Shorten a description to fit nicely in the list view.
+  // Also strips leading emoji + "Boosters only — " / "Sword Bearers only — " prefixes.
+  const short = (desc) => {
+    const cleaned = desc.replace(/^[^\w\/&]+(?:\w[\w\s]*only\s*[—-]\s*)?/u, "");
+    return cleaned.length > 60 ? cleaned.slice(0, 57) + "…" : cleaned;
+  };
+
   for (const tier of [0, 1, 2, 3]) {
     const cmds = COMMAND_CATALOG.filter((c) => c.tier === tier);
     if (cmds.length === 0) continue;
 
+    if (tier === 0) {
+      // Split tier 0 into three focused fields to stay under Discord's 1024-char limit.
+      const utilNames = new Set(["help", "contact", "policy", "serverlist"]);
+      const boosterNames = new Set([
+        "createboosterrole",
+        "editboostercolor",
+        "boosterroleimage",
+        "deleteboosterrole",
+        "claimboosterrole",
+        "auditboosterroles",
+        "pruneboosterroles",
+      ]);
+
+      const util = cmds.filter((c) => utilNames.has(c.name));
+      const booster = cmds.filter((c) => boosterNames.has(c.name));
+      const premium = cmds.filter(
+        (c) => !utilNames.has(c.name) && !boosterNames.has(c.name),
+      );
+
+      if (util.length > 0) {
+        embed.addFields({
+          name: "Everyone — Utility",
+          value: util
+            .map((c) => `\`${c.name}\` — ${short(c.description)}`)
+            .join("\n"),
+          inline: false,
+        });
+      }
+      if (booster.length > 0) {
+        embed.addFields({
+          name: "Everyone — 🚀 Booster Roles",
+          value: booster
+            .map((c) => `\`${c.name}\` — ${short(c.description)}`)
+            .join("\n"),
+          inline: false,
+        });
+      }
+      if (premium.length > 0) {
+        embed.addFields({
+          name: "Everyone — ⚔️ Premium Roles",
+          value: premium
+            .map((c) => `\`${c.name}\` — ${short(c.description)}`)
+            .join("\n"),
+          inline: false,
+        });
+      }
+      continue;
+    }
+
     const roles = rolesForTier(tier);
     const roleline = roles ? `*${roles}*\n` : "";
     const value =
-      roleline + cmds.map((c) => `\`${c.name}\` — ${c.description}`).join("\n");
+      roleline +
+      cmds.map((c) => `\`${c.name}\` — ${short(c.description)}`).join("\n");
 
     embed.addFields({
-      name: tierLabel(tier),
+      name: fieldName(tier),
       value,
       inline: false,
     });
