@@ -149,6 +149,8 @@ const COMMAND_TIERS = {
   crosskick: 1,
   reports: 1,
   help: 0,
+  contact: 0,
+  policy: 0,
   mangacheck: 2,
   crossmute: 2,
   crossunmute: 2,
@@ -284,6 +286,13 @@ const COMMAND_CATALOG = [
     tier: 0,
     usage: "/contact",
     description: "Get the bot owner's contact for questions or issues.",
+    args: [],
+  },
+  {
+    name: "policy",
+    tier: 0,
+    usage: "/policy",
+    description: "Get the links to the bot's Terms of Service and Privacy Policy.",
     args: [],
   },
   {

@@ -228,6 +228,12 @@ const crossCommands = [
     ),
 
   new SlashCommandBuilder()
+    .setName("policy")
+    .setDescription(
+      "Get the links to the bot's Terms of Service and Privacy Policy",
+    ),
+
+  new SlashCommandBuilder()
     .setName("serverlist")
     .setDescription("Show all servers this bot is currently in"),
 
@@ -686,6 +692,7 @@ client.on("messageCreate", async (message) => {
       "reports",
       "help",
       "contact",
+      "policy",
       "serverlist",
       "archive",
       "mangacheck",
@@ -910,6 +917,31 @@ client.on("messageCreate", async (message) => {
           )
           .setFooter({
             text: "You can send a friend request or DM directly if you share a server.",
+          });
+        return message.reply({ embeds: [embed] });
+      }
+
+      // policy — no userId needed
+      if (command === "policy") {
+        const embed = new EmbedBuilder()
+          .setColor(0xc0392b)
+          .setTitle("📄  Terms of Service & Privacy Policy")
+          .setDescription(
+            "Read the full Terms of Service and Privacy Policy for this bot:",
+          )
+          .addFields({
+            name: "🔗 Policy page",
+            value:
+              "https://migueleugim26.github.io/miguelindo-staff-bot-privacy/",
+          })
+          .addFields({
+            name: "📌 Quick links",
+            value:
+              "[Terms of Service](https://migueleugim26.github.io/miguelindo-staff-bot-privacy/#tos) · " +
+              "[Privacy Policy](https://migueleugim26.github.io/miguelindo-staff-bot-privacy/#privacy)",
+          })
+          .setFooter({
+            text: "Questions? Use /contact to reach the bot owner.",
           });
         return message.reply({ embeds: [embed] });
       }
@@ -1504,6 +1536,7 @@ client.on("interactionCreate", async (interaction) => {
       "reports",
       "help",
       "contact",
+      "policy",
       "serverlist",
       "archive",
       "purgeall",
@@ -1747,6 +1780,30 @@ client.on("interactionCreate", async (interaction) => {
         )
         .setFooter({
           text: "You can send a friend request or DM directly if you share a server.",
+        });
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+
+    if (commandName === "policy") {
+      const embed = new EmbedBuilder()
+        .setColor(0xc0392b)
+        .setTitle("📄  Terms of Service & Privacy Policy")
+        .setDescription(
+          "Read the full Terms of Service and Privacy Policy for this bot:",
+        )
+        .addFields({
+          name: "🔗 Policy page",
+          value:
+            "https://migueleugim26.github.io/miguelindo-staff-bot-privacy/",
+        })
+        .addFields({
+          name: "📌 Quick links",
+          value:
+            "[Terms of Service](https://migueleugim26.github.io/miguelindo-staff-bot-privacy/#tos) · " +
+            "[Privacy Policy](https://migueleugim26.github.io/miguelindo-staff-bot-privacy/#privacy)",
+        })
+        .setFooter({
+          text: "Questions? Use /contact to reach the bot owner.",
         });
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
