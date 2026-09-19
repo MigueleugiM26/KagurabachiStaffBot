@@ -84,16 +84,18 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildModeration,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
+    // GatewayIntentBits.GuildMessages,  // ← disabled: no longer reading message content
+    // GatewayIntentBits.MessageContent, // ← disabled: MCI removed, prefix commands commented out below
     GatewayIntentBits.GuildVoiceStates,
   ],
 });
 
-const CROSS_PREFIX = process.env.CROSS_PREFIX || "&";
+// CROSS_PREFIX and pendingData were used by the messageCreate prefix handler,
+// which has been disabled pending MessageContent Intent approval.
+// const CROSS_PREFIX = process.env.CROSS_PREFIX || "&";
+// const pendingData = new Map();
+const CROSS_PREFIX = process.env.CROSS_PREFIX || "&"; // kept for slash command error messages only
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "changeme";
-
-const pendingData = new Map();
 const crossActionInProgress = new Set();
 
 // ─── SLASH COMMAND DEFINITIONS ────────────────────────────────────────────────
@@ -600,647 +602,651 @@ client.once("ready", async () => {
 });
 
 // ─── RESTRICTED CHANNEL HELPER ───────────────────────────────────────────────
-// Returns true if the message was deleted (caller should stop processing it).
-// Handles both regular messages and GIF-picker messages, which arrive with no
-// content/attachments and only gain their embed on the first messageUpdate.
+// ⚠️  DISABLED — requires MessageContent intent (reads message.content for URLs).
+// Re-enable if MCI is approved in the future.
+//
+// const URL_REGEX = /https?:\/\/\S+|discord\.gg\/\S+/i;
+//
+// async function enforceRestrictedChannel(message, config) {
+//   if (!config.restrictedChannels?.length) return false;
+//   if (!config.restrictedChannels.includes(message.channel.id)) return false;
+//   const isStaff = hasTierAccess(message.member, config, "crosscheck");
+//   if (isStaff) return false;
+//   const hasLink = URL_REGEX.test(message.content);
+//   const hasMedia = message.attachments.size > 0;
+//   const hasEmbed = message.embeds.some(
+//     (e) => e.data?.type === "gifv" || e.video || e.image,
+//   );
+//   console.log(
+//     `[restricted] ${message.author.username} (${message.author.id}) in #${message.channel.id} | link=${hasLink} media=${hasMedia} embed=${hasEmbed}`,
+//   );
+//   if (!hasLink && !hasMedia && !hasEmbed) return false;
+//   try {
+//     await message.delete();
+//   } catch (err) {
+//     console.error(`[restricted] Failed to delete message ${message.id}:`, err.message);
+//     return false;
+//   }
+//   const warning = await message.channel.send(
+//     `⛔ <@${message.author.id}> — links and media are not allowed in this channel.`,
+//   );
+//   setTimeout(() => warning.delete().catch(() => {}), 6000);
+//   return true;
+// }
 
-const URL_REGEX = /https?:\/\/\S+|discord\.gg\/\S+/i;
-
-async function enforceRestrictedChannel(message, config) {
-  if (!config.restrictedChannels?.length) return false;
-  if (!config.restrictedChannels.includes(message.channel.id)) return false;
-
-  const isStaff = hasTierAccess(message.member, config, "crosscheck"); // tier 1+
-  if (isStaff) return false;
-
-  const hasLink = URL_REGEX.test(message.content);
-  const hasMedia = message.attachments.size > 0;
-  // GIFs from Discord's GIF picker arrive as embeds (type "gifv") or video embeds
-  const hasEmbed = message.embeds.some(
-    (e) => e.data?.type === "gifv" || e.video || e.image,
-  );
-
-  console.log(
-    `[restricted] ${message.author.username} (${message.author.id}) in #${message.channel.id} | link=${hasLink} media=${hasMedia} embed=${hasEmbed}`,
-  );
-
-  if (!hasLink && !hasMedia && !hasEmbed) return false;
-
-  try {
-    await message.delete();
-  } catch (err) {
-    console.error(
-      `[restricted] Failed to delete message ${message.id}:`,
-      err.message,
-    );
-    return false;
-  }
-
-  const warning = await message.channel.send(
-    `⛔ <@${message.author.id}> — links and media are not allowed in this channel.`,
-  );
-  setTimeout(() => warning.delete().catch(() => {}), 6000);
-  return true;
-}
-
-// messageUpdate catches GIF-picker gifs: they arrive empty on messageCreate,
-// then Discord populates the embed on the very first update.
-client.on("messageUpdate", async (oldMessage, newMessage) => {
-  // Only act on the first embed population (old had none, new has some)
-  if (oldMessage.embeds?.length > 0) return;
-  if (!newMessage.embeds?.length) return;
-  if (!newMessage.guild || newMessage.author?.bot) return;
-
-  const config = getGuildConfig(newMessage.guild.id);
-  if (!config) return;
-
-  // Fetch full message so member is populated
-  let fullMessage;
-  try {
-    fullMessage = await newMessage.fetch();
-  } catch {
-    return;
-  }
-
-  await enforceRestrictedChannel(fullMessage, config);
-});
+// ─── MESSAGE UPDATE ───────────────────────────────────────────────────────────
+// ⚠️  DISABLED — only used by enforceRestrictedChannel above (GIF-picker edge case).
+//
+// client.on("messageUpdate", async (oldMessage, newMessage) => {
+//   if (oldMessage.embeds?.length > 0) return;
+//   if (!newMessage.embeds?.length) return;
+//   if (!newMessage.guild || newMessage.author?.bot) return;
+//   const config = getGuildConfig(newMessage.guild.id);
+//   if (!config) return;
+//   let fullMessage;
+//   try {
+//     fullMessage = await newMessage.fetch();
+//   } catch {
+//     return;
+//   }
+//   await enforceRestrictedChannel(fullMessage, config);
+// });
 
 // ─── MESSAGE LISTENER ─────────────────────────────────────────────────────────
+// ⚠️  DISABLED — entire messageCreate handler requires MessageContent intent.
+//
+// What was here:
+//   1. enforceRestrictedChannel() — blocked links/media in restricted channels
+//   2. Prefix commands (&crossban, &crossmute, etc.) — replaced by slash commands
+//   3. Booster/premium prefix commands — replaced by slash commands
+//   4. Sapphire mod command enrichment — read !mute/!ban messages from Sapphire
+//      to pre-populate pendingData with staffName, reason, and image attachment
+//      before guildAuditLogEntryCreate fires. Without this, the audit log handler
+//      falls back to fetchAuditLogs() to get the staff name (slightly delayed,
+//      no image support). Warn logging is fully lost (no audit log event for warns).
+//   5. Warn command logging — completely lost, warns have no audit log event.
+//
+// Re-enable this block only if MessageContent Intent is approved in the future.
 
-client.on("messageCreate", async (message) => {
-  if (!message.guild || message.author.bot) return;
-
-  const config = getGuildConfig(message.guild.id);
-  if (!config) return;
-
-  const content = message.content;
-
-  // ── Restricted-channel guard ──────────────────────────────────────────────
-  if (await enforceRestrictedChannel(message, config)) return;
-
-  // ── Cross / bot commands ──
-  if (content.startsWith(CROSS_PREFIX)) {
-    const args = content.slice(CROSS_PREFIX.length).trim().split(/\s+/);
-    const command = args[0]?.toLowerCase();
-    const validCrossCommands = [
-      "crossmute",
-      "crossunmute",
-      "crossban",
-      "crossunban",
-      "crosskick",
-      "crosscheck",
-      "reports",
-      "help",
-      "contact",
-      "policy",
-      "serverlist",
-      "archive",
-      "mangacheck",
-      "purgeall",
-      "transferemotes",
-    ];
-
-    // ── Booster commands — no userId, uses the message author ──────────────
-    if (
-      [
-        "createboosterrole",
-        "editboostercolor",
-        "boosterroleimage",
-        "deleteboosterrole",
-        "claimboosterrole",
-        "auditboosterroles",
-        "pruneboosterroles",
-      ].includes(command)
-    ) {
-      const replyFn = (c) => message.reply(c);
-      if (command === "createboosterrole") {
-        const [roleName, type, color1, color2] = args.slice(1);
-        if (!roleName)
-          return message.reply(
-            "❌ Usage: `&createBoosterRole <n> [type] [color1] [color2]`",
-          );
-        const imageAttachment = message.attachments.first() ?? null;
-        const guildCfg = getGuildConfig(message.guild.id);
-        return executeCreateBoosterRole(
-          message.guild,
-          message.member,
-          {
-            roleName,
-            type: type?.toLowerCase(),
-            color1,
-            color2,
-            imageAttachment,
-            anchorRoleId: guildCfg?.boosterAnchorRoleId ?? null,
-          },
-          replyFn,
-        );
-      }
-      if (command === "editboostercolor") {
-        const [type, color1, color2] = args.slice(1);
-        if (!type || !color1)
-          return message.reply(
-            "❌ Usage: `&editBoosterColor <type> <color1> [color2]`",
-          );
-        return executeEditBoosterColor(
-          message.guild,
-          message.member,
-          { type: type.toLowerCase(), color1, color2 },
-          replyFn,
-        );
-      }
-      if (command === "boosterroleimage") {
-        const imageAttachment = message.attachments.first() ?? null;
-        return executeBoosterRoleImage(
-          message.guild,
-          message.member,
-          imageAttachment,
-          replyFn,
-        );
-      }
-      if (command === "deleteboosterrole") {
-        return executeDeleteBoosterRole(message.guild, message.member, replyFn);
-      }
-      if (command === "claimboosterrole") {
-        const guildCfg2 = getGuildConfig(message.guild.id);
-        const configRoleIds = [
-          ...(guildCfg2?.tier1Roles ?? []),
-          ...(guildCfg2?.tier2Roles ?? []),
-          ...(guildCfg2?.tier3Roles ?? []),
-        ];
-        const specifiedRoleId = args[1]?.replace(/[<@&>]/g, "") || null;
-        return executeClaimBoosterRole(
-          message.guild,
-          message.member,
-          {
-            configRoleIds,
-            bottomAnchorRoleId: guildCfg2?.bottomBoosterAnchorRoleId ?? null,
-            ignoredBoosterRoles: guildCfg2?.ignoredBoosterRoles ?? [],
-            specifiedRoleId,
-          },
-          replyFn,
-          guildCfg2?.boosterAnchorRoleId ?? null,
-        );
-      }
-      if (command === "auditboosterroles") {
-        if (!hasTierAccess(message.member, config, "auditboosterroles")) {
-          return message.reply(
-            "❌ You don't have permission to use this command.",
-          );
-        }
-        return executeAuditBoosterRoles(message.guild, replyFn);
-      }
-      if (command === "pruneboosterroles") {
-        if (!hasTierAccess(message.member, config, "pruneboosterroles")) {
-          return message.reply(
-            "❌ You don't have permission to use this command.",
-          );
-        }
-        return executePruneBoosterRoles(message.guild, replyFn);
-      }
-    }
-
-    // ── Premium (Sword Bearer) commands ──────────────────────────────────────
-    if (
-      [
-        "createpremiumrole",
-        "editpremiumcolor",
-        "premiumroleimage",
-        "deletepremiumrole",
-        "claimpremiumrole",
-      ].includes(command)
-    ) {
-      const replyFn = (c) => message.reply(c);
-      const premCfg = getGuildConfig(message.guild.id);
-      const premiumRoleId = premCfg?.premiumRoleId ?? null;
-      const premiumAnchorRoleId = premCfg?.premiumAnchorRoleId ?? null;
-      const bottomPremiumAnchorRoleId =
-        premCfg?.bottomPremiumAnchorRoleId ?? null;
-      const ignoredPremiumRoles = premCfg?.ignoredPremiumRoles ?? [];
-
-      if (command === "createpremiumrole") {
-        const [roleName, type, color1, color2] = args.slice(1);
-        if (!roleName)
-          return message.reply(
-            "❌ Usage: `&createPremiumRole <n> [type] [color1] [color2]`",
-          );
-        const imageAttachment = message.attachments.first() ?? null;
-        return executeCreatePremiumRole(
-          message.guild,
-          message.member,
-          {
-            roleName,
-            type: type?.toLowerCase(),
-            color1,
-            color2,
-            imageAttachment,
-            premiumRoleId,
-            anchorRoleId: premiumAnchorRoleId,
-          },
-          replyFn,
-        );
-      }
-      if (command === "editpremiumcolor") {
-        const [type, color1, color2] = args.slice(1);
-        if (!type)
-          return message.reply(
-            "❌ Usage: `&editPremiumColor <type> <color1> [color2]`",
-          );
-        return executeEditPremiumColor(
-          message.guild,
-          message.member,
-          { type: type.toLowerCase(), color1, color2, premiumRoleId },
-          replyFn,
-        );
-      }
-      if (command === "premiumroleimage") {
-        const imageAttachment = message.attachments.first() ?? null;
-        return executePremiumRoleImage(
-          message.guild,
-          message.member,
-          imageAttachment,
-          { premiumRoleId },
-          replyFn,
-        );
-      }
-      if (command === "deletepremiumrole") {
-        return executeDeletePremiumRole(
-          message.guild,
-          message.member,
-          { premiumRoleId },
-          replyFn,
-        );
-      }
-      if (command === "claimpremiumrole") {
-        const configRoleIds = [
-          ...(premCfg?.tier1Roles ?? []),
-          ...(premCfg?.tier2Roles ?? []),
-          ...(premCfg?.tier3Roles ?? []),
-        ];
-        const specifiedRoleId = args[1]?.replace(/[<@&>]/g, "") || null;
-        return executeClaimPremiumRole(
-          message.guild,
-          message.member,
-          {
-            premiumRoleId,
-            anchorRoleId: premiumAnchorRoleId,
-            bottomAnchorRoleId: bottomPremiumAnchorRoleId,
-            ignoredPremiumRoles,
-            configRoleIds,
-            specifiedRoleId,
-          },
-          replyFn,
-        );
-      }
-    }
-
-    if (validCrossCommands.includes(command)) {
-      if (!hasTierAccess(message.member, config, command)) {
-        return message.reply(
-          "❌ You don't have permission to use this command.",
-        );
-      }
-
-      // help doesn't need a userId
-      if (command === "help") {
-        const target = args[1]?.toLowerCase() ?? null;
-        return message.reply(buildHelpPayload(target, config, message.guild));
-      }
-
-      // contact — no userId needed
-      if (command === "contact") {
-        const embed = new EmbedBuilder()
-          .setColor(Colors.Blurple)
-          .setTitle("📬  Contact the Bot Owner")
-          .setDescription(
-            "For questions, issues, or setup requests about this bot, reach out on Discord:\n\n" +
-              "<@450842915024142374> (`450842915024142374`)",
-          )
-          .setFooter({
-            text: "You can send a friend request or DM directly if you share a server.",
-          });
-        return message.reply({ embeds: [embed] });
-      }
-
-      // policy — no userId needed
-      if (command === "policy") {
-        const embed = new EmbedBuilder()
-          .setColor(0xc0392b)
-          .setTitle("📄  Terms of Service & Privacy Policy")
-          .setDescription(
-            "Read the full Terms of Service and Privacy Policy for this bot:",
-          )
-          .addFields({
-            name: "🔗 Policy page",
-            value:
-              "https://migueleugim26.github.io/miguelindo-staff-bot-privacy/",
-          })
-          .addFields({
-            name: "📌 Quick links",
-            value:
-              "[Terms of Service](https://migueleugim26.github.io/miguelindo-staff-bot-privacy/#tos) · " +
-              "[Privacy Policy](https://migueleugim26.github.io/miguelindo-staff-bot-privacy/#privacy)",
-          })
-          .setFooter({
-            text: "Questions? Use /contact to reach the bot owner.",
-          });
-        return message.reply({ embeds: [embed] });
-      }
-
-      // serverlist — no userId needed
-      if (command === "serverlist") {
-        const guilds = [...client.guilds.cache.values()].sort((a, b) =>
-          a.name.localeCompare(b.name),
-        );
-        const list = guilds
-          .map((g) => `• **${g.name}** (\`${g.id}\`)`)
-          .join("\n");
-        const embed = new EmbedBuilder()
-          .setColor(Colors.Blurple)
-          .setTitle(`🌐  Servers (${guilds.length})`)
-          .setDescription(list || "No servers found.");
-        return message.reply({ embeds: [embed] });
-      }
-
-      // archive — no userId needed
-      if (command === "archive") {
-        const input = args.slice(1).join(" ");
-        if (!input)
-          return message.reply(
-            `❌ Usage: \`${CROSS_PREFIX}archive <emoji or sticker ID>\``,
-          );
-        const target = await resolveArchiveTarget(client, input);
-        if (!target)
-          return message.reply(
-            "❌ Couldn't recognise that. Paste a custom emoji (e.g. `<:name:id>`) or a sticker ID.",
-          );
-        if (target.type === "lottie")
-          return message.reply(
-            `❌ **${target.name}** is a Lottie sticker — Discord doesn't expose a static image for these.`,
-          );
-        return message.reply({
-          files: [{ attachment: target.url, name: target.name }],
-        });
-      }
-
-      // purgeall — no userId needed
-      if (command === "purgeall") {
-        const channelArg = args[1] ?? null;
-        // Resolve channel from mention (<#id>) or bare ID, defaulting to current channel
-        const channelId = channelArg
-          ? channelArg.replace(/[<#>]/g, "")
-          : message.channel.id;
-
-        let targetChannel;
-        try {
-          targetChannel = await message.guild.channels.fetch(channelId);
-        } catch {
-          return message.reply(`❌ Could not find channel \`${channelId}\`.`);
-        }
-        if (!targetChannel?.isTextBased()) {
-          return message.reply("❌ That channel is not a text channel.");
-        }
-
-        const allowedChannels = config.purgeChannels ?? [];
-        const progressMsg = await message.reply(
-          `🗑️ Starting purge of <#${targetChannel.id}>…`,
-        );
-        const editProgressFn = (content) => progressMsg.edit(content);
-
-        return executePurgeAll({
-          channel: targetChannel,
-          allowedChannels,
-          staffName: message.author.username,
-          staffId: message.author.id,
-          editProgressFn,
-        });
-      }
-
-      if (command === "transferemotes") {
-        const sourceGuildId = args[1];
-        const targetGuildId = args[2];
-        const type = args[3]?.toLowerCase() || "both";
-        if (!sourceGuildId || !targetGuildId) {
-          return message.reply(
-            `❌ Usage: \`${CROSS_PREFIX}transferemotes <sourceGuildId> <targetGuildId> [type]\``,
-          );
-        }
-        return executeTransferEmotes(client, {
-          sourceGuildId,
-          targetGuildId,
-          staffName: message.author.username,
-          staffId: message.author.id,
-          replyTarget: message,
-          type,
-        });
-      }
-
-      /*
-      if (commandName === "testlock") {
-        return handleTestLock(interaction, guild, member);
-      }
-
-      if (commandName === "testunlock") {
-        return handleTestUnlock(interaction, guild, member);
-      }
-      */
-
-      if (command === "mangacheck") {
-        if (!mangaScheduler)
-          return message.reply(
-            "⏳ Bot is still initializing, try again in a moment.",
-          );
-        const progress = await message.reply(
-          "🔍 Checking for a new chapter...",
-        );
-        try {
-          const result = await mangaScheduler.manualCheck(message.guild.id);
-          if (result) {
-            await progress.edit(
-              `✅ Posted: **${result.chapterName}**\n${result.chapterLink}`,
-            );
-          } else {
-            await progress.edit(
-              "ℹ️ No new chapter found — either it's a break week, it was already posted, or manga updates aren't configured for this server.",
-            );
-          }
-        } catch (err) {
-          await progress.edit(`❌ Error: ${err.message}`);
-        }
-        return;
-      }
-
-      const userId = (args[1] ?? "").replace(/[<@!>]/g, "");
-      if (!userId || !/^\d+$/.test(userId)) {
-        return message.reply(
-          `❌ Usage: \`${CROSS_PREFIX}${command} <userID>${command === "crossmute" ? " <duration>" : ""} [reason]\``,
-        );
-      }
-
-      const attachment = message.attachments.first();
-      const imageUrl = attachment?.url ?? null;
-      const sourceGuild = { id: message.guild.id, name: message.guild.name };
-      const staffName = message.author.username;
-      const staffId = message.author.id;
-
-      if (command === "crossmute") {
-        const durationStr = args[2];
-        if (!durationStr)
-          return message.reply(
-            `❌ Usage: \`${CROSS_PREFIX}crossmute <userID> <duration> [reason]\``,
-          );
-        const reason = args.slice(3).join(" ") || "No reason provided";
-        await executeCrossMute(client, crossActionInProgress, {
-          userId,
-          durationStr,
-          reason,
-          staffName,
-          staffId,
-          imageUrl,
-          sourceGuild,
-          replyTarget: message,
-        });
-      } else if (command === "crossunmute") {
-        const reason = args.slice(2).join(" ") || "No reason provided";
-        await executeCrossUnmute(client, crossActionInProgress, {
-          userId,
-          reason,
-          staffName,
-          staffId,
-          sourceGuild,
-          replyTarget: message,
-        });
-      } else if (command === "crossban") {
-        const reason = args.slice(2).join(" ") || "No reason provided";
-        await executeCrossBan(client, crossActionInProgress, {
-          userId,
-          reason,
-          staffName,
-          staffId,
-          imageUrl,
-          sourceGuild,
-          replyTarget: message,
-        });
-      } else if (command === "crossunban") {
-        const reason = args.slice(2).join(" ") || "No reason provided";
-        await executeCrossUnban(client, crossActionInProgress, {
-          userId,
-          reason,
-          staffName,
-          staffId,
-          sourceGuild,
-          replyTarget: message,
-        });
-      } else if (command === "crosskick") {
-        const reason = args.slice(2).join(" ") || "No reason provided";
-        await executeCrossKick(client, crossActionInProgress, {
-          userId,
-          reason,
-          staffName,
-          staffId,
-          imageUrl,
-          sourceGuild,
-          replyTarget: message,
-        });
-      } else if (command === "crosscheck") {
-        await executeCrossCheck(client, {
-          userId,
-          staffId,
-          sourceGuild,
-          replyTarget: message,
-        });
-      } else if (command === "reports") {
-        const fullArg = args[2]?.toLowerCase();
-        const full = fullArg === "false" ? false : true;
-        await executeReports(client, {
-          userId,
-          sourceGuildId: message.guild.id,
-          full,
-          replyTarget: message,
-        });
-      }
-      return;
-    }
-  }
-
-  // ── Regular mod commands (audit log enrichment + warn) ──
-  const prefix = config.prefix;
-  if (!content.startsWith(prefix)) return;
-
-  const args = content.slice(prefix.length).trim().split(/\s+/);
-  const command = args[0]?.toLowerCase();
-
-  const watchedCommands = [
-    "mute",
-    "timeout",
-    "ban",
-    "warn",
-    "kick",
-    "unmute",
-    "untimeout",
-    "unban",
-  ];
-  if (!watchedCommands.includes(command)) return;
-
-  const userArg = args[1];
-  if (!userArg) return;
-  const userId = userArg.replace(/[<@!>]/g, "");
-  if (!/^\d+$/.test(userId)) return;
-
-  const attachment = message.attachments.first();
-  const key = `${message.guild.id}:${userId}`;
-  const hasDuration = ["mute", "timeout"].includes(command);
-  const parsedReason =
-    (hasDuration ? args.slice(3) : args.slice(2)).join(" ") || null;
-
-  console.log(
-    `[msg] ✅ command="${command}" target=${userId} staff=${message.author.username} guild=${message.guild.id}`,
-  );
-  pendingData.set(key, {
-    staffName: message.author.username,
-    staffId: message.author.id,
-    reason: parsedReason,
-    url: attachment?.url ?? null,
-    timestamp: Date.now(),
-  });
-  setTimeout(() => pendingData.delete(key), 15_000);
-
-  if (command === "warn") {
-    const reason = parsedReason || "No reason provided";
-    try {
-      const reportsChannelId = getReportsChannelId(message.guild.id);
-      if (!reportsChannelId)
-        return console.warn(
-          `[warn] No reports channel configured for guild ${message.guild.id}`,
-        );
-
-      const user = await client.users.fetch(userId).catch(() => null);
-      if (!user) return console.warn(`[warn] Could not fetch user ${userId}`);
-
-      const reportsChannel =
-        await message.guild.channels.fetch(reportsChannelId);
-      if (!reportsChannel)
-        return console.error("[warn] Reports channel not found!");
-
-      const thread = await findOrCreateThread(reportsChannel, user);
-      const embed = buildEmbed({
-        type: "Warn",
-        emoji: "⚠️",
-        color: Colors.Yellow,
-        reason,
-        duration: "N/A",
-        staffName: message.author.username,
-        staffId: message.author.id,
-        imageUrl: attachment?.url ?? null,
-      });
-      await thread.send({ embeds: [embed] });
-      console.log(
-        `[warn] Logged for ${user.username} (${userId}) in guild ${message.guild.id}`,
-      );
-    } catch (err) {
-      console.error("[warn] Error:", err);
-    }
-  }
-});
+// client.on("messageCreate", async (message) => {
+//   if (!message.guild || message.author.bot) return;
+//   const config = getGuildConfig(message.guild.id);
+//   if (!config) return;
+//   const content = message.content;
+//   if (await enforceRestrictedChannel(message, config)) return;
+//   // ... (full prefix command handling removed — use slash commands instead)
+//   // ... (Sapphire enrichment removed — audit log fallback still active below)
+// });
+//   if (!config) return;
+//
+//   const content = message.content;
+//
+//   // ── Restricted-channel guard ──────────────────────────────────────────────
+//   if (await enforceRestrictedChannel(message, config)) return;
+//
+//   // ── Cross / bot commands ──
+//   if (content.startsWith(CROSS_PREFIX)) {
+//     const args = content.slice(CROSS_PREFIX.length).trim().split(/\s+/);
+//     const command = args[0]?.toLowerCase();
+//     const validCrossCommands = [
+//       "crossmute",
+//       "crossunmute",
+//       "crossban",
+//       "crossunban",
+//       "crosskick",
+//       "crosscheck",
+//       "reports",
+//       "help",
+//       "contact",
+//       "policy",
+//       "serverlist",
+//       "archive",
+//       "mangacheck",
+//       "purgeall",
+//       "transferemotes",
+//     ];
+//
+//     // ── Booster commands — no userId, uses the message author ──────────────
+//     if (
+//       [
+//         "createboosterrole",
+//         "editboostercolor",
+//         "boosterroleimage",
+//         "deleteboosterrole",
+//         "claimboosterrole",
+//         "auditboosterroles",
+//         "pruneboosterroles",
+//       ].includes(command)
+//     ) {
+//       const replyFn = (c) => message.reply(c);
+//       if (command === "createboosterrole") {
+//         const [roleName, type, color1, color2] = args.slice(1);
+//         if (!roleName)
+//           return message.reply(
+//             "❌ Usage: `&createBoosterRole <n> [type] [color1] [color2]`",
+//           );
+//         const imageAttachment = message.attachments.first() ?? null;
+//         const guildCfg = getGuildConfig(message.guild.id);
+//         return executeCreateBoosterRole(
+//           message.guild,
+//           message.member,
+//           {
+//             roleName,
+//             type: type?.toLowerCase(),
+//             color1,
+//             color2,
+//             imageAttachment,
+//             anchorRoleId: guildCfg?.boosterAnchorRoleId ?? null,
+//           },
+//           replyFn,
+//         );
+//       }
+//       if (command === "editboostercolor") {
+//         const [type, color1, color2] = args.slice(1);
+//         if (!type || !color1)
+//           return message.reply(
+//             "❌ Usage: `&editBoosterColor <type> <color1> [color2]`",
+//           );
+//         return executeEditBoosterColor(
+//           message.guild,
+//           message.member,
+//           { type: type.toLowerCase(), color1, color2 },
+//           replyFn,
+//         );
+//       }
+//       if (command === "boosterroleimage") {
+//         const imageAttachment = message.attachments.first() ?? null;
+//         return executeBoosterRoleImage(
+//           message.guild,
+//           message.member,
+//           imageAttachment,
+//           replyFn,
+//         );
+//       }
+//       if (command === "deleteboosterrole") {
+//         return executeDeleteBoosterRole(message.guild, message.member, replyFn);
+//       }
+//       if (command === "claimboosterrole") {
+//         const guildCfg2 = getGuildConfig(message.guild.id);
+//         const configRoleIds = [
+//           ...(guildCfg2?.tier1Roles ?? []),
+//           ...(guildCfg2?.tier2Roles ?? []),
+//           ...(guildCfg2?.tier3Roles ?? []),
+//         ];
+//         const specifiedRoleId = args[1]?.replace(/[<@&>]/g, "") || null;
+//         return executeClaimBoosterRole(
+//           message.guild,
+//           message.member,
+//           {
+//             configRoleIds,
+//             bottomAnchorRoleId: guildCfg2?.bottomBoosterAnchorRoleId ?? null,
+//             ignoredBoosterRoles: guildCfg2?.ignoredBoosterRoles ?? [],
+//             specifiedRoleId,
+//           },
+//           replyFn,
+//           guildCfg2?.boosterAnchorRoleId ?? null,
+//         );
+//       }
+//       if (command === "auditboosterroles") {
+//         if (!hasTierAccess(message.member, config, "auditboosterroles")) {
+//           return message.reply(
+//             "❌ You don't have permission to use this command.",
+//           );
+//         }
+//         return executeAuditBoosterRoles(message.guild, replyFn);
+//       }
+//       if (command === "pruneboosterroles") {
+//         if (!hasTierAccess(message.member, config, "pruneboosterroles")) {
+//           return message.reply(
+//             "❌ You don't have permission to use this command.",
+//           );
+//         }
+//         return executePruneBoosterRoles(message.guild, replyFn);
+//       }
+//     }
+//
+//     // ── Premium (Sword Bearer) commands ──────────────────────────────────────
+//     if (
+//       [
+//         "createpremiumrole",
+//         "editpremiumcolor",
+//         "premiumroleimage",
+//         "deletepremiumrole",
+//         "claimpremiumrole",
+//       ].includes(command)
+//     ) {
+//       const replyFn = (c) => message.reply(c);
+//       const premCfg = getGuildConfig(message.guild.id);
+//       const premiumRoleId = premCfg?.premiumRoleId ?? null;
+//       const premiumAnchorRoleId = premCfg?.premiumAnchorRoleId ?? null;
+//       const bottomPremiumAnchorRoleId =
+//         premCfg?.bottomPremiumAnchorRoleId ?? null;
+//       const ignoredPremiumRoles = premCfg?.ignoredPremiumRoles ?? [];
+//
+//       if (command === "createpremiumrole") {
+//         const [roleName, type, color1, color2] = args.slice(1);
+//         if (!roleName)
+//           return message.reply(
+//             "❌ Usage: `&createPremiumRole <n> [type] [color1] [color2]`",
+//           );
+//         const imageAttachment = message.attachments.first() ?? null;
+//         return executeCreatePremiumRole(
+//           message.guild,
+//           message.member,
+//           {
+//             roleName,
+//             type: type?.toLowerCase(),
+//             color1,
+//             color2,
+//             imageAttachment,
+//             premiumRoleId,
+//             anchorRoleId: premiumAnchorRoleId,
+//           },
+//           replyFn,
+//         );
+//       }
+//       if (command === "editpremiumcolor") {
+//         const [type, color1, color2] = args.slice(1);
+//         if (!type)
+//           return message.reply(
+//             "❌ Usage: `&editPremiumColor <type> <color1> [color2]`",
+//           );
+//         return executeEditPremiumColor(
+//           message.guild,
+//           message.member,
+//           { type: type.toLowerCase(), color1, color2, premiumRoleId },
+//           replyFn,
+//         );
+//       }
+//       if (command === "premiumroleimage") {
+//         const imageAttachment = message.attachments.first() ?? null;
+//         return executePremiumRoleImage(
+//           message.guild,
+//           message.member,
+//           imageAttachment,
+//           { premiumRoleId },
+//           replyFn,
+//         );
+//       }
+//       if (command === "deletepremiumrole") {
+//         return executeDeletePremiumRole(
+//           message.guild,
+//           message.member,
+//           { premiumRoleId },
+//           replyFn,
+//         );
+//       }
+//       if (command === "claimpremiumrole") {
+//         const configRoleIds = [
+//           ...(premCfg?.tier1Roles ?? []),
+//           ...(premCfg?.tier2Roles ?? []),
+//           ...(premCfg?.tier3Roles ?? []),
+//         ];
+//         const specifiedRoleId = args[1]?.replace(/[<@&>]/g, "") || null;
+//         return executeClaimPremiumRole(
+//           message.guild,
+//           message.member,
+//           {
+//             premiumRoleId,
+//             anchorRoleId: premiumAnchorRoleId,
+//             bottomAnchorRoleId: bottomPremiumAnchorRoleId,
+//             ignoredPremiumRoles,
+//             configRoleIds,
+//             specifiedRoleId,
+//           },
+//           replyFn,
+//         );
+//       }
+//     }
+//
+//     if (validCrossCommands.includes(command)) {
+//       if (!hasTierAccess(message.member, config, command)) {
+//         return message.reply(
+//           "❌ You don't have permission to use this command.",
+//         );
+//       }
+//
+//       // help doesn't need a userId
+//       if (command === "help") {
+//         const target = args[1]?.toLowerCase() ?? null;
+//         return message.reply(buildHelpPayload(target, config, message.guild));
+//       }
+//
+//       // contact — no userId needed
+//       if (command === "contact") {
+//         const embed = new EmbedBuilder()
+//           .setColor(Colors.Blurple)
+//           .setTitle("📬  Contact the Bot Owner")
+//           .setDescription(
+//             "For questions, issues, or setup requests about this bot, reach out on Discord:\n\n" +
+//               "<@450842915024142374> (`450842915024142374`)",
+//           )
+//           .setFooter({
+//             text: "You can send a friend request or DM directly if you share a server.",
+//           });
+//         return message.reply({ embeds: [embed] });
+//       }
+//
+//       // policy — no userId needed
+//       if (command === "policy") {
+//         const embed = new EmbedBuilder()
+//           .setColor(0xc0392b)
+//           .setTitle("📄  Terms of Service & Privacy Policy")
+//           .setDescription(
+//             "Read the full Terms of Service and Privacy Policy for this bot:",
+//           )
+//           .addFields({
+//             name: "🔗 Policy page",
+//             value:
+//               "https://migueleugim26.github.io/miguelindo-staff-bot-privacy/",
+//           })
+//           .addFields({
+//             name: "📌 Quick links",
+//             value:
+//               "[Terms of Service](https://migueleugim26.github.io/miguelindo-staff-bot-privacy/#tos) · " +
+//               "[Privacy Policy](https://migueleugim26.github.io/miguelindo-staff-bot-privacy/#privacy)",
+//           })
+//           .setFooter({
+//             text: "Questions? Use /contact to reach the bot owner.",
+//           });
+//         return message.reply({ embeds: [embed] });
+//       }
+//
+//       // serverlist — no userId needed
+//       if (command === "serverlist") {
+//         const guilds = [...client.guilds.cache.values()].sort((a, b) =>
+//           a.name.localeCompare(b.name),
+//         );
+//         const list = guilds
+//           .map((g) => `• **${g.name}** (\`${g.id}\`)`)
+//           .join("\n");
+//         const embed = new EmbedBuilder()
+//           .setColor(Colors.Blurple)
+//           .setTitle(`🌐  Servers (${guilds.length})`)
+//           .setDescription(list || "No servers found.");
+//         return message.reply({ embeds: [embed] });
+//       }
+//
+//       // archive — no userId needed
+//       if (command === "archive") {
+//         const input = args.slice(1).join(" ");
+//         if (!input)
+//           return message.reply(
+//             `❌ Usage: \`${CROSS_PREFIX}archive <emoji or sticker ID>\``,
+//           );
+//         const target = await resolveArchiveTarget(client, input);
+//         if (!target)
+//           return message.reply(
+//             "❌ Couldn't recognise that. Paste a custom emoji (e.g. `<:name:id>`) or a sticker ID.",
+//           );
+//         if (target.type === "lottie")
+//           return message.reply(
+//             `❌ **${target.name}** is a Lottie sticker — Discord doesn't expose a static image for these.`,
+//           );
+//         return message.reply({
+//           files: [{ attachment: target.url, name: target.name }],
+//         });
+//       }
+//
+//       // purgeall — no userId needed
+//       if (command === "purgeall") {
+//         const channelArg = args[1] ?? null;
+//         // Resolve channel from mention (<#id>) or bare ID, defaulting to current channel
+//         const channelId = channelArg
+//           ? channelArg.replace(/[<#>]/g, "")
+//           : message.channel.id;
+//
+//         let targetChannel;
+//         try {
+//           targetChannel = await message.guild.channels.fetch(channelId);
+//         } catch {
+//           return message.reply(`❌ Could not find channel \`${channelId}\`.`);
+//         }
+//         if (!targetChannel?.isTextBased()) {
+//           return message.reply("❌ That channel is not a text channel.");
+//         }
+//
+//         const allowedChannels = config.purgeChannels ?? [];
+//         const progressMsg = await message.reply(
+//           `🗑️ Starting purge of <#${targetChannel.id}>…`,
+//         );
+//         const editProgressFn = (content) => progressMsg.edit(content);
+//
+//         return executePurgeAll({
+//           channel: targetChannel,
+//           allowedChannels,
+//           staffName: message.author.username,
+//           staffId: message.author.id,
+//           editProgressFn,
+//         });
+//       }
+//
+//       if (command === "transferemotes") {
+//         const sourceGuildId = args[1];
+//         const targetGuildId = args[2];
+//         const type = args[3]?.toLowerCase() || "both";
+//         if (!sourceGuildId || !targetGuildId) {
+//           return message.reply(
+//             `❌ Usage: \`${CROSS_PREFIX}transferemotes <sourceGuildId> <targetGuildId> [type]\``,
+//           );
+//         }
+//         return executeTransferEmotes(client, {
+//           sourceGuildId,
+//           targetGuildId,
+//           staffName: message.author.username,
+//           staffId: message.author.id,
+//           replyTarget: message,
+//           type,
+//         });
+//       }
+//
+//       /*
+//       if (commandName === "testlock") {
+//         return handleTestLock(interaction, guild, member);
+//       }
+//
+//       if (commandName === "testunlock") {
+//         return handleTestUnlock(interaction, guild, member);
+//       }
+//       */
+//
+//       if (command === "mangacheck") {
+//         if (!mangaScheduler)
+//           return message.reply(
+//             "⏳ Bot is still initializing, try again in a moment.",
+//           );
+//         const progress = await message.reply(
+//           "🔍 Checking for a new chapter...",
+//         );
+//         try {
+//           const result = await mangaScheduler.manualCheck(message.guild.id);
+//           if (result) {
+//             await progress.edit(
+//               `✅ Posted: **${result.chapterName}**\n${result.chapterLink}`,
+//             );
+//           } else {
+//             await progress.edit(
+//               "ℹ️ No new chapter found — either it's a break week, it was already posted, or manga updates aren't configured for this server.",
+//             );
+//           }
+//         } catch (err) {
+//           await progress.edit(`❌ Error: ${err.message}`);
+//         }
+//         return;
+//       }
+//
+//       const userId = (args[1] ?? "").replace(/[<@!>]/g, "");
+//       if (!userId || !/^\d+$/.test(userId)) {
+//         return message.reply(
+//           `❌ Usage: \`${CROSS_PREFIX}${command} <userID>${command === "crossmute" ? " <duration>" : ""} [reason]\``,
+//         );
+//       }
+//
+//       const attachment = message.attachments.first();
+//       const imageUrl = attachment?.url ?? null;
+//       const sourceGuild = { id: message.guild.id, name: message.guild.name };
+//       const staffName = message.author.username;
+//       const staffId = message.author.id;
+//
+//       if (command === "crossmute") {
+//         const durationStr = args[2];
+//         if (!durationStr)
+//           return message.reply(
+//             `❌ Usage: \`${CROSS_PREFIX}crossmute <userID> <duration> [reason]\``,
+//           );
+//         const reason = args.slice(3).join(" ") || "No reason provided";
+//         await executeCrossMute(client, crossActionInProgress, {
+//           userId,
+//           durationStr,
+//           reason,
+//           staffName,
+//           staffId,
+//           imageUrl,
+//           sourceGuild,
+//           replyTarget: message,
+//         });
+//       } else if (command === "crossunmute") {
+//         const reason = args.slice(2).join(" ") || "No reason provided";
+//         await executeCrossUnmute(client, crossActionInProgress, {
+//           userId,
+//           reason,
+//           staffName,
+//           staffId,
+//           sourceGuild,
+//           replyTarget: message,
+//         });
+//       } else if (command === "crossban") {
+//         const reason = args.slice(2).join(" ") || "No reason provided";
+//         await executeCrossBan(client, crossActionInProgress, {
+//           userId,
+//           reason,
+//           staffName,
+//           staffId,
+//           imageUrl,
+//           sourceGuild,
+//           replyTarget: message,
+//         });
+//       } else if (command === "crossunban") {
+//         const reason = args.slice(2).join(" ") || "No reason provided";
+//         await executeCrossUnban(client, crossActionInProgress, {
+//           userId,
+//           reason,
+//           staffName,
+//           staffId,
+//           sourceGuild,
+//           replyTarget: message,
+//         });
+//       } else if (command === "crosskick") {
+//         const reason = args.slice(2).join(" ") || "No reason provided";
+//         await executeCrossKick(client, crossActionInProgress, {
+//           userId,
+//           reason,
+//           staffName,
+//           staffId,
+//           imageUrl,
+//           sourceGuild,
+//           replyTarget: message,
+//         });
+//       } else if (command === "crosscheck") {
+//         await executeCrossCheck(client, {
+//           userId,
+//           staffId,
+//           sourceGuild,
+//           replyTarget: message,
+//         });
+//       } else if (command === "reports") {
+//         const fullArg = args[2]?.toLowerCase();
+//         const full = fullArg === "false" ? false : true;
+//         await executeReports(client, {
+//           userId,
+//           sourceGuildId: message.guild.id,
+//           full,
+//           replyTarget: message,
+//         });
+//       }
+//       return;
+//     }
+//   }
+//
+//   // ── Regular mod commands (audit log enrichment + warn) ──
+//   const prefix = config.prefix;
+//   if (!content.startsWith(prefix)) return;
+//
+//   const args = content.slice(prefix.length).trim().split(/\s+/);
+//   const command = args[0]?.toLowerCase();
+//
+//   const watchedCommands = [
+//     "mute",
+//     "timeout",
+//     "ban",
+//     "warn",
+//     "kick",
+//     "unmute",
+//     "untimeout",
+//     "unban",
+//   ];
+//   if (!watchedCommands.includes(command)) return;
+//
+//   const userArg = args[1];
+//   if (!userArg) return;
+//   const userId = userArg.replace(/[<@!>]/g, "");
+//   if (!/^\d+$/.test(userId)) return;
+//
+//   const attachment = message.attachments.first();
+//   const key = `${message.guild.id}:${userId}`;
+//   const hasDuration = ["mute", "timeout"].includes(command);
+//   const parsedReason =
+//     (hasDuration ? args.slice(3) : args.slice(2)).join(" ") || null;
+//
+//   console.log(
+//     `[msg] ✅ command="${command}" target=${userId} staff=${message.author.username} guild=${message.guild.id}`,
+//   );
+//   pendingData.set(key, {
+//     staffName: message.author.username,
+//     staffId: message.author.id,
+//     reason: parsedReason,
+//     url: attachment?.url ?? null,
+//     timestamp: Date.now(),
+//   });
+//   setTimeout(() => pendingData.delete(key), 15_000);
+//
+//   if (command === "warn") {
+//     const reason = parsedReason || "No reason provided";
+//     try {
+//       const reportsChannelId = getReportsChannelId(message.guild.id);
+//       if (!reportsChannelId)
+//         return console.warn(
+//           `[warn] No reports channel configured for guild ${message.guild.id}`,
+//         );
+//
+//       const user = await client.users.fetch(userId).catch(() => null);
+//       if (!user) return console.warn(`[warn] Could not fetch user ${userId}`);
+//
+//       const reportsChannel =
+//         await message.guild.channels.fetch(reportsChannelId);
+//       if (!reportsChannel)
+//         return console.error("[warn] Reports channel not found!");
+//
+//       const thread = await findOrCreateThread(reportsChannel, user);
+//       const embed = buildEmbed({
+//         type: "Warn",
+//         emoji: "⚠️",
+//         color: Colors.Yellow,
+//         reason,
+//         duration: "N/A",
+//         staffName: message.author.username,
+//         staffId: message.author.id,
+//         imageUrl: attachment?.url ?? null,
+//       });
+//       await thread.send({ embeds: [embed] });
+//       console.log(
+//         `[warn] Logged for ${user.username} (${userId}) in guild ${message.guild.id}`,
+//       );
+//     } catch (err) {
+//       console.error("[warn] Error:", err);
+//     }
+//   }
+// });
 
 // ─── ARCHIVE HELPER ──────────────────────────────────────────────────────────
 
@@ -2114,13 +2120,12 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
     const user = target;
     if (!user) return;
 
-    const key = `${guild.id}:${user.id}`;
-    const pending = pendingData.get(key);
-    if (pending) pendingData.delete(key);
-
-    const imageUrl = pending?.url ?? null;
-    let staffName = pending?.staffName ?? null;
-    let staffId = pending?.staffId ?? null;
+    // ── Staff resolution via audit log ────────────────────────────────────
+    // pendingData (Sapphire message enrichment) has been removed along with
+    // the messageCreate handler. Staff name is now always resolved from the
+    // audit log entry directly, with a short delay to let Discord populate it.
+    let staffName = entry.executor?.username ?? null;
+    let staffId = entry.executor?.id ?? null;
 
     if (!staffName) {
       try {
@@ -2140,11 +2145,11 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
       type,
       emoji,
       color,
-      reason: pending?.reason || reason || "No reason provided",
+      reason: reason || "No reason provided",
       duration,
       staffName,
       staffId,
-      imageUrl,
+      imageUrl: null, // image attachments from Sapphire messages no longer captured
     });
     await thread.send({ embeds: [embed] });
     console.log(
