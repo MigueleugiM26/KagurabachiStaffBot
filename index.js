@@ -23,6 +23,8 @@ const {
   NoSubscriberBehavior,
 } = require("@discordjs/voice");
 
+// commit
+
 // ── Join command constants ─────────────────────────────────────────────────────
 const JOIN_GUILD_ID = "1210305827148144701";
 const JOIN_CHANNEL_ID = "1480294501292577050";
