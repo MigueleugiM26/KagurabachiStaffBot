@@ -23,8 +23,6 @@ const {
   NoSubscriberBehavior,
 } = require("@discordjs/voice");
 
-// commit
-
 // ── Join command constants ─────────────────────────────────────────────────────
 const JOIN_GUILD_ID = "1210305827148144701";
 const JOIN_CHANNEL_ID = "1480294501292577050";
@@ -38,7 +36,7 @@ const {
 } = require("./utils/config");
 const { findOrCreateThread } = require("./utils/threads");
 const { formatDuration } = require("./utils/format");
-const { buildEmbed } = require("./utils/helpers");
+const { buildEmbed, parseSapphireReason } = require("./utils/helpers");
 const { buildHelpPayload } = require("./utils/help");
 const { executeReports } = require("./utils/reports");
 const { initMangaSchedulers } = require("./utils/manga-scheduler");
@@ -680,12 +678,12 @@ client.once("ready", async () => {
 //   // ... (Sapphire enrichment removed — audit log fallback still active below)
 // });
 //   if (!config) return;
-//
+// 
 //   const content = message.content;
-//
+// 
 //   // ── Restricted-channel guard ──────────────────────────────────────────────
 //   if (await enforceRestrictedChannel(message, config)) return;
-//
+// 
 //   // ── Cross / bot commands ──
 //   if (content.startsWith(CROSS_PREFIX)) {
 //     const args = content.slice(CROSS_PREFIX.length).trim().split(/\s+/);
@@ -707,7 +705,7 @@ client.once("ready", async () => {
 //       "purgeall",
 //       "transferemotes",
 //     ];
-//
+// 
 //     // ── Booster commands — no userId, uses the message author ──────────────
 //     if (
 //       [
@@ -806,7 +804,7 @@ client.once("ready", async () => {
 //         return executePruneBoosterRoles(message.guild, replyFn);
 //       }
 //     }
-//
+// 
 //     // ── Premium (Sword Bearer) commands ──────────────────────────────────────
 //     if (
 //       [
@@ -824,7 +822,7 @@ client.once("ready", async () => {
 //       const bottomPremiumAnchorRoleId =
 //         premCfg?.bottomPremiumAnchorRoleId ?? null;
 //       const ignoredPremiumRoles = premCfg?.ignoredPremiumRoles ?? [];
-//
+// 
 //       if (command === "createpremiumrole") {
 //         const [roleName, type, color1, color2] = args.slice(1);
 //         if (!roleName)
@@ -900,20 +898,20 @@ client.once("ready", async () => {
 //         );
 //       }
 //     }
-//
+// 
 //     if (validCrossCommands.includes(command)) {
 //       if (!hasTierAccess(message.member, config, command)) {
 //         return message.reply(
 //           "❌ You don't have permission to use this command.",
 //         );
 //       }
-//
+// 
 //       // help doesn't need a userId
 //       if (command === "help") {
 //         const target = args[1]?.toLowerCase() ?? null;
 //         return message.reply(buildHelpPayload(target, config, message.guild));
 //       }
-//
+// 
 //       // contact — no userId needed
 //       if (command === "contact") {
 //         const embed = new EmbedBuilder()
@@ -928,7 +926,7 @@ client.once("ready", async () => {
 //           });
 //         return message.reply({ embeds: [embed] });
 //       }
-//
+// 
 //       // policy — no userId needed
 //       if (command === "policy") {
 //         const embed = new EmbedBuilder()
@@ -953,7 +951,7 @@ client.once("ready", async () => {
 //           });
 //         return message.reply({ embeds: [embed] });
 //       }
-//
+// 
 //       // serverlist — no userId needed
 //       if (command === "serverlist") {
 //         const guilds = [...client.guilds.cache.values()].sort((a, b) =>
@@ -968,7 +966,7 @@ client.once("ready", async () => {
 //           .setDescription(list || "No servers found.");
 //         return message.reply({ embeds: [embed] });
 //       }
-//
+// 
 //       // archive — no userId needed
 //       if (command === "archive") {
 //         const input = args.slice(1).join(" ");
@@ -989,7 +987,7 @@ client.once("ready", async () => {
 //           files: [{ attachment: target.url, name: target.name }],
 //         });
 //       }
-//
+// 
 //       // purgeall — no userId needed
 //       if (command === "purgeall") {
 //         const channelArg = args[1] ?? null;
@@ -997,7 +995,7 @@ client.once("ready", async () => {
 //         const channelId = channelArg
 //           ? channelArg.replace(/[<#>]/g, "")
 //           : message.channel.id;
-//
+// 
 //         let targetChannel;
 //         try {
 //           targetChannel = await message.guild.channels.fetch(channelId);
@@ -1007,13 +1005,13 @@ client.once("ready", async () => {
 //         if (!targetChannel?.isTextBased()) {
 //           return message.reply("❌ That channel is not a text channel.");
 //         }
-//
+// 
 //         const allowedChannels = config.purgeChannels ?? [];
 //         const progressMsg = await message.reply(
 //           `🗑️ Starting purge of <#${targetChannel.id}>…`,
 //         );
 //         const editProgressFn = (content) => progressMsg.edit(content);
-//
+// 
 //         return executePurgeAll({
 //           channel: targetChannel,
 //           allowedChannels,
@@ -1022,7 +1020,7 @@ client.once("ready", async () => {
 //           editProgressFn,
 //         });
 //       }
-//
+// 
 //       if (command === "transferemotes") {
 //         const sourceGuildId = args[1];
 //         const targetGuildId = args[2];
@@ -1041,17 +1039,17 @@ client.once("ready", async () => {
 //           type,
 //         });
 //       }
-//
+// 
 //       /*
 //       if (commandName === "testlock") {
 //         return handleTestLock(interaction, guild, member);
 //       }
-//
+// 
 //       if (commandName === "testunlock") {
 //         return handleTestUnlock(interaction, guild, member);
 //       }
 //       */
-//
+// 
 //       if (command === "mangacheck") {
 //         if (!mangaScheduler)
 //           return message.reply(
@@ -1076,20 +1074,20 @@ client.once("ready", async () => {
 //         }
 //         return;
 //       }
-//
+// 
 //       const userId = (args[1] ?? "").replace(/[<@!>]/g, "");
 //       if (!userId || !/^\d+$/.test(userId)) {
 //         return message.reply(
 //           `❌ Usage: \`${CROSS_PREFIX}${command} <userID>${command === "crossmute" ? " <duration>" : ""} [reason]\``,
 //         );
 //       }
-//
+// 
 //       const attachment = message.attachments.first();
 //       const imageUrl = attachment?.url ?? null;
 //       const sourceGuild = { id: message.guild.id, name: message.guild.name };
 //       const staffName = message.author.username;
 //       const staffId = message.author.id;
-//
+// 
 //       if (command === "crossmute") {
 //         const durationStr = args[2];
 //         if (!durationStr)
@@ -1169,14 +1167,14 @@ client.once("ready", async () => {
 //       return;
 //     }
 //   }
-//
+// 
 //   // ── Regular mod commands (audit log enrichment + warn) ──
 //   const prefix = config.prefix;
 //   if (!content.startsWith(prefix)) return;
-//
+// 
 //   const args = content.slice(prefix.length).trim().split(/\s+/);
 //   const command = args[0]?.toLowerCase();
-//
+// 
 //   const watchedCommands = [
 //     "mute",
 //     "timeout",
@@ -1188,18 +1186,18 @@ client.once("ready", async () => {
 //     "unban",
 //   ];
 //   if (!watchedCommands.includes(command)) return;
-//
+// 
 //   const userArg = args[1];
 //   if (!userArg) return;
 //   const userId = userArg.replace(/[<@!>]/g, "");
 //   if (!/^\d+$/.test(userId)) return;
-//
+// 
 //   const attachment = message.attachments.first();
 //   const key = `${message.guild.id}:${userId}`;
 //   const hasDuration = ["mute", "timeout"].includes(command);
 //   const parsedReason =
 //     (hasDuration ? args.slice(3) : args.slice(2)).join(" ") || null;
-//
+// 
 //   console.log(
 //     `[msg] ✅ command="${command}" target=${userId} staff=${message.author.username} guild=${message.guild.id}`,
 //   );
@@ -1211,7 +1209,7 @@ client.once("ready", async () => {
 //     timestamp: Date.now(),
 //   });
 //   setTimeout(() => pendingData.delete(key), 15_000);
-//
+// 
 //   if (command === "warn") {
 //     const reason = parsedReason || "No reason provided";
 //     try {
@@ -1220,15 +1218,15 @@ client.once("ready", async () => {
 //         return console.warn(
 //           `[warn] No reports channel configured for guild ${message.guild.id}`,
 //         );
-//
+// 
 //       const user = await client.users.fetch(userId).catch(() => null);
 //       if (!user) return console.warn(`[warn] Could not fetch user ${userId}`);
-//
+// 
 //       const reportsChannel =
 //         await message.guild.channels.fetch(reportsChannelId);
 //       if (!reportsChannel)
 //         return console.error("[warn] Reports channel not found!");
-//
+// 
 //       const thread = await findOrCreateThread(reportsChannel, user);
 //       const embed = buildEmbed({
 //         type: "Warn",
@@ -2122,12 +2120,18 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
     const user = target;
     if (!user) return;
 
-    // ── Staff resolution via audit log ────────────────────────────────────
-    // pendingData (Sapphire message enrichment) has been removed along with
-    // the messageCreate handler. Staff name is now always resolved from the
-    // audit log entry directly, with a short delay to let Discord populate it.
+    // ── Parse Sapphire's reason string ───────────────────────────────────
+    // Sapphire embeds staff name, date, time and duration into the audit log
+    // reason field, e.g: "[HfA5Rgy] 23/09/2026 - 14:48 @.miguelindo (5 minutes): testing"
+    // parseSapphireReason extracts these cleanly; falls back to null if the
+    // reason isn't in Sapphire's format (e.g. manual audit log entries).
+    const parsed = parseSapphireReason(reason);
+
+    // ── Staff resolution ──────────────────────────────────────────────────
+    // Prefer the staff name parsed from Sapphire's reason string.
+    // If that's unavailable, try entry.executor, then fetchAuditLogs fallback.
     let staffName = entry.executor?.username ?? null;
-    let staffId = entry.executor?.id ?? null;
+    let staffId   = entry.executor?.id ?? null;
 
     if (!staffName) {
       try {
@@ -2135,10 +2139,10 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
         const logs = await guild.fetchAuditLogs({ limit: 5, type: action });
         const match = logs.entries.find((e) => e.target?.id === user.id);
         staffName = match?.executor?.username ?? "Unknown";
-        staffId = match?.executor?.id ?? null;
+        staffId   = match?.executor?.id ?? null;
       } catch {
         staffName = "Unknown";
-        staffId = null;
+        staffId   = null;
       }
     }
 
@@ -2147,15 +2151,20 @@ client.on("guildAuditLogEntryCreate", async (entry, guild) => {
       type,
       emoji,
       color,
-      reason: reason || "No reason provided",
+      // Use parsed reason if available, otherwise fall back to raw audit log reason
+      reason:          parsed?.reason ?? reason ?? "No reason provided",
       duration,
       staffName,
       staffId,
-      imageUrl: null, // image attachments from Sapphire messages no longer captured
+      imageUrl:        null,
+      // Extra fields from Sapphire's reason string
+      parsedStaffName: parsed?.staffName ?? null,
+      actionDate:      parsed?.date      ?? null,
+      actionTime:      parsed?.time      ?? null,
     });
     await thread.send({ embeds: [embed] });
     console.log(
-      `[${type.toLowerCase()}] Logged for ${user.username} (${user.id}) in guild ${guild.id} (${guild.name}) | staff: ${staffName} (${staffId ?? "unknown"})`,
+      `[${type.toLowerCase()}] Logged for ${user.username} (${user.id}) in guild ${guild.id} (${guild.name}) | staff: ${parsed?.staffName ?? staffName} (${staffId ?? "unknown"})`,
     );
   } catch (err) {
     console.error(
