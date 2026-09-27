@@ -6,7 +6,26 @@
  * Searching by ID prefix ensures renames don't break lookups.
  * If an existing thread has a stale name, it will be renamed automatically.
  */
+
+const creationLocks = new Map(); // userId → Promise<thread>
+
 async function findOrCreateThread(reportsChannel, user) {
+  // If a creation is already in flight for this user, wait for it instead of
+  // racing ahead and creating a duplicate thread.
+  if (creationLocks.has(user.id)) {
+    return creationLocks.get(user.id);
+  }
+
+  const promise = _findOrCreateThread(reportsChannel, user);
+  creationLocks.set(user.id, promise);
+  try {
+    return await promise;
+  } finally {
+    creationLocks.delete(user.id);
+  }
+}
+
+async function _findOrCreateThread(reportsChannel, user) {
   const threadName = `${user.id} (${user.username})`;
 
   // 1. Check active threads first (fastest)
